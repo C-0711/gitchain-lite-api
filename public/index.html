@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>gitchain-lite</title>
+<style>
+* { box-sizing:border-box; }
+body { margin:0; font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif; color:#1f1e24; background:#fff; font-size:14px; }
+header { height:44px; background:#fff; border-bottom:1px solid #e9ecef; display:flex; align-items:center; padding:0 16px; gap:12px; }
+header .crumb { color:#333; font-size:13px; flex:1; }
+header .crumb b { color:#1f1e24; }
+header .crumb .sep { color:#bbb; margin:0 6px; }
+header .crumb a { color:#1f4fd8; cursor:pointer; text-decoration:none; }
+header .crumb a:hover { text-decoration:underline; }
+header .live { font-size:11px; color:#1aaa55; font-weight:600; display:flex; align-items:center; gap:5px; }
+header .live .d { width:7px; height:7px; border-radius:50%; background:#1aaa55; }
+header input { width:220px; padding:5px 10px; border:1px solid #ccc; border-radius:4px; }
+.layout { display:flex; height:calc(100vh - 44px); }
+nav.sidebar { width:240px; background:#fafafa; border-right:1px solid #e9ecef; flex-shrink:0; padding:12px 0; overflow-y:auto; }
+nav.sidebar .brand { display:flex; align-items:center; gap:8px; padding:0 16px 14px; font-weight:700; font-size:15px; }
+nav.sidebar .brand .sq { width:26px;height:26px;background:#1f1e24;color:#fff;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700; }
+nav.sidebar a { display:flex; justify-content:space-between; align-items:center; padding:7px 16px; color:#333; text-decoration:none; cursor:pointer; gap:8px; }
+nav.sidebar a:hover { background:#ececef; }
+nav.sidebar a.active { background:#eef2fb; color:#1f4fd8; font-weight:600; border-right:3px solid #1f4fd8; }
+nav.sidebar a .tname { display:flex; align-items:center; gap:8px; min-width:0; }
+nav.sidebar a .tname .iso { width:8px;height:8px;border-radius:50%;background:#1aaa55;flex-shrink:0; }
+nav.sidebar a .tname .iso.soft { background:#e0a92b; }
+nav.sidebar .label { font-size:11px; text-transform:uppercase; color:#89888d; padding:14px 16px 4px; letter-spacing:.04em; }
+nav.sidebar .count { color:#999; font-size:12px; }
+main { flex:1; overflow-y:auto; padding:20px 28px; }
+h1 { font-size:20px; margin:0 0 6px; display:flex; align-items:center; gap:10px; }
+h2 { font-size:16px; margin:0 0 10px; }
+.sub { color:#666; margin-bottom:14px; font-size:13px; }
+.isobadge { font-size:11px; font-weight:600; border-radius:10px; padding:2px 10px; letter-spacing:.02em; }
+.isobadge.hard { background:#e6f6ec; color:#158a44; } .isobadge.soft { background:#fdf5e3; color:#9a6200; }
+.actionbar { display:flex; gap:8px; margin:6px 0 18px; flex-wrap:wrap; }
+.cols { display:flex; gap:24px; align-items:flex-start; }
+.tree { width:250px; flex-shrink:0; border:1px solid #e9ecef; border-radius:4px; padding:6px 0; }
+.tree .row { padding:7px 14px; cursor:pointer; display:flex; align-items:center; gap:6px; justify-content:space-between;}
+.tree .row:hover { background:#f3f3f5; }
+.tree .row.file.active { background:#eef2fb; }
+.tree .row .stat { font-size:11px; font-family:Menlo,Consolas,monospace; color:#aaa;}
+.content { flex:1; min-width:0; }
+.panel { border:1px solid #e9ecef; border-radius:4px; padding:16px; margin-bottom:14px; }
+.cardgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; margin-top:8px; }
+.card { border:1px solid #e9ecef; border-radius:6px; padding:16px; cursor:pointer; transition:box-shadow .1s,border-color .1s; }
+.card:hover { border-color:#c7d2f7; box-shadow:0 2px 10px rgba(31,79,216,.08); }
+.card .ct { display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px; }
+.card .ct .av { width:30px;height:30px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0; }
+.card .cmeta { color:#777; font-size:12.5px; margin-top:10px; display:flex; gap:14px; }
+.ptree { border:1px solid #e9ecef; border-radius:6px; padding:6px 0; margin-bottom:16px; }
+.pnode { }
+.prow { display:flex; align-items:center; gap:8px; padding:8px 14px; cursor:pointer; justify-content:space-between; }
+.prow:hover { background:#f6f7f9; }
+.prow .pl { display:flex; align-items:center; gap:9px; min-width:0; }
+.prow .tw { color:#999; width:14px; text-align:center; font-size:11px; user-select:none; }
+.prow .ic { width:24px;height:24px;border-radius:5px;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0; }
+.prow.container .nm { color:#1f4fd8; }
+.prow .rt { color:#aaa; font-size:11px; font-family:Menlo,Consolas,monospace; }
+.children { }
+table.projects { width:100%; border-collapse:collapse; margin-top:6px; }
+table.projects td { padding:10px 8px; border-bottom:1px solid #f1f1f1; cursor:pointer; }
+table.projects tr:hover td { background:#f8f9fb; }
+table.projects .ic { width:22px;height:22px;border-radius:4px;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;margin-right:8px; }
+.badge { background:#eee; border-radius:10px; padding:2px 8px; font-size:12px; margin-left:8px; }
+.empty { color:#999; padding:14px; font-size:13px; }
+.codebox { background:#fafafa; border:1px solid #e9ecef; border-radius:4px; padding:12px 16px; font-family:Menlo,Consolas,monospace; font-size:13px; line-height:1.6; white-space:pre-wrap; overflow-x:auto; word-break:break-word; max-height:420px;}
+.commitrow { padding:12px 14px; border-bottom:1px solid #f1f1f1; display:flex; align-items:center; gap:12px; cursor:pointer; }
+.commitrow:last-child { border-bottom:none; } .commitrow:hover { background:#fafafa; }
+.commitrow .avatar { width:28px;height:28px;border-radius:50%;background:#6e49cb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0; }
+.commitrow .crmain { flex:1; min-width:0; } .commitrow .msg { font-weight:600; }
+.commitrow .meta { color:#888; font-size:12px; margin-top:2px; }
+.commitrow .hash { font-family:Menlo,Consolas,monospace; background:#f1f1f1; padding:2px 8px; border-radius:4px; font-size:12px; color:#444; }
+.refchip { display:inline-block; font-family:Menlo,Consolas,monospace; font-size:11px; border:1px solid #d5d7f4; background:#eef2fb; color:#1f4fd8; border-radius:10px; padding:2px 9px; margin-right:6px; cursor:pointer; }
+.refchip.tag { border-color:#f3d9a0; background:#fdf5e3; color:#9a6200; }
+.refchip.prot::after { content:" 🔒"; font-size:9px; }
+.commitheadbar { display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:1px solid #e9ecef; font-size:13px; }
+.diffstats { color:#666; font-size:13px; }
+.diffstats .plus { color:#1aaa55; font-weight:600; } .diffstats .minus { color:#e2445c; font-weight:600; }
+.filehead { display:flex; justify-content:space-between; align-items:center; background:#f8f9fa; border:1px solid #e9ecef; border-bottom:none; padding:8px 14px; font-family:Menlo,Consolas,monospace; font-size:13px; border-radius:4px 4px 0 0; margin-top:14px;}
+table.diff { width:100%; border-collapse:collapse; font-family:Menlo,Consolas,monospace; font-size:13px; border:1px solid #e9ecef; border-radius:0 0 4px 4px; }
+table.diff td.ln { width:40px; text-align:right; color:#999; padding:1px 8px; user-select:none; border-right:1px solid #eee; background:#fbfbfb; }
+table.diff td.code { padding:1px 10px; white-space:pre-wrap; word-break:break-word; }
+table.diff tr.add td.code, table.diff tr.add td.ln { background:#e6ffed; }
+table.diff tr.del td.code, table.diff tr.del td.ln { background:#ffeef0; }
+table.diff tr.hunk td { background:#f1f4ff; color:#5a6b9a; }
+.loading { color:#999; padding:20px 0; }
+.err { color:#e2445c; padding:14px; border:1px solid #f5c6cd; border-radius:4px; background:#fff5f6; }
+.metarow { padding:4px 0; font-size:13px; }
+.hashlink { color:#1f75cb; font-family:Menlo,Consolas,monospace; }
+.links a { color:#1f75cb; text-decoration:none; cursor:pointer; margin-right:6px; font-size:12px;}
+.mrlink { color:#e2440c; cursor:pointer; font-weight:600; text-decoration:none; } .mrlink:hover { text-decoration:underline; }
+.mrrow { padding:12px 14px; border-bottom:1px solid #f1f1f1; display:flex; align-items:center; gap:12px; cursor:pointer; }
+.mrrow:last-child { border-bottom:none; } .mrrow:hover { background:#fafafa; }
+.mrrow .mrico { width:26px;height:26px;border-radius:50%;background:#1aaa55;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0; }
+.mrrow.merged .mrico { background:#6e49cb; } .mrrow.stale .mrico { background:#e2445c; }
+.mrrow .mrmain { flex:1; min-width:0; } .mrrow .mrtitle { font-weight:600; }
+.mrrow .mrmeta { color:#888; font-size:12px; margin-top:2px; }
+.mrstate { font-size:11px; text-transform:uppercase; letter-spacing:.03em; border-radius:10px; padding:2px 9px; font-weight:600; }
+.mrstate.open { background:#e6f6ec; color:#1aaa55; } .mrstate.merged { background:#efe9fb; color:#6e49cb; }
+.btn { display:inline-block; padding:7px 14px; border-radius:5px; border:1px solid #1f4fd8; background:#1f4fd8; color:#fff; font-size:13px; font-weight:600; cursor:pointer; }
+.btn:hover { background:#1a44bd; } .btn.ghost { background:#fff; color:#1f4fd8; border-color:#c7d2f7; } .btn.ghost:hover { background:#eef2fb; }
+.btn.green { background:#1aaa55; border-color:#1aaa55; } .btn.green:hover { background:#159447; }
+.clone { display:flex; gap:8px; align-items:center; margin:4px 0; }
+.clone code { background:#f4f5f7; border:1px solid #e9ecef; border-radius:4px; padding:6px 10px; font-family:Menlo,Consolas,monospace; font-size:12.5px; flex:1; overflow-x:auto; white-space:nowrap; }
+.copy { cursor:pointer; color:#1f4fd8; font-size:12px; user-select:none; }
+.note { font-size:12px; color:#888; } .note.warn { color:#e2445c; }
+.atomform { border:1px solid #e9ecef; border-radius:6px; padding:14px 16px; margin-bottom:16px; background:#fbfcfe; }
+.atomform h3 { margin:0 0 10px; font-size:14px; }
+.atomform .grid { display:grid; grid-template-columns:120px 1fr; gap:8px 12px; align-items:center; }
+.atomform label { font-size:12px; color:#555; } .atomform input { padding:6px 9px; border:1px solid #ccc; border-radius:4px; width:100%; font-size:13px; }
+.atomform .actions { margin-top:12px; display:flex; gap:8px; align-items:center; }
+.reviewbar { display:flex; gap:8px; align-items:center; margin:10px 0 6px; }
+.reviewbar input { padding:6px 9px; border:1px solid #ccc; border-radius:4px; font-size:13px; width:180px; }
+/* Modal */
+.modalbg { position:fixed; inset:0; background:rgba(20,20,28,.42); display:flex; align-items:center; justify-content:center; z-index:50; }
+.modal { background:#fff; border-radius:8px; width:440px; max-width:92vw; box-shadow:0 12px 40px rgba(0,0,0,.25); overflow:hidden; }
+.modal h3 { margin:0; padding:16px 20px; border-bottom:1px solid #eee; font-size:15px; }
+.modal .body { padding:16px 20px; }
+.modal .fld { margin-bottom:12px; } .modal .fld label { display:block; font-size:12px; color:#555; margin-bottom:4px; }
+.modal .fld input, .modal .fld select { width:100%; padding:8px 10px; border:1px solid #ccc; border-radius:5px; font-size:13px; }
+.modal .foot { padding:12px 20px; border-top:1px solid #eee; display:flex; justify-content:flex-end; gap:8px; }
+.modal .msg { font-size:12px; color:#e2445c; padding:0 20px 12px; }
+</style></head>
+<body>
+<header>
+  <div class="crumb" id="crumb">GitChain</div>
+  <div class="live"><span class="d"></span>live · gitchain-lite</div>
+  <input placeholder="filtern…" id="filter">
+</header>
+<div class="layout">
+<nav class="sidebar">
+  <div class="brand"><span class="sq">gl</span> gitchain-lite</div>
+  <a id="nav-overview" class="active">Overview <span class="count" id="tcount">…</span></a>
+  <div class="label">Tenants</div>
+  <div id="tenants"></div>
+</nav>
+<main id="main"><div class="loading">lädt…</div></main>
+</div>
+
+<script>
+// API base is switchable WITHOUT a code edit: ?api=https://your-host  (remembered in localStorage).
+// Empty = same-origin (gitchain-lite serves UI + API from the same server).
+const _qapi = new URLSearchParams(location.search).get("api");
+if (_qapi !== null) localStorage.setItem("gitchain_api", _qapi);
+const API = (localStorage.getItem("gitchain_api") || "").replace(/\/$/, "");
+const j = (p) => fetch(API + p).then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.error || r.status)));
+const jpost = (p, body) => fetch(API + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+  .then(r => r.json().then(d => r.ok ? d : Promise.reject(d.error || r.status)));
+const el = (id) => document.getElementById(id);
+const esc = (s) => (s==null?"":String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const initial = (s) => (s||"?").charAt(0).toUpperCase();
+const COLORS = {product:"#c0562b",master:"#2b6cc0",source:"#3a8a3a",brain:"#6e49cb",enrichment:"#8a9a2b",context:"#b0673a",agent:"#c02b6c",knowledge:"#2ba0a0",mandant:"#7a5a2b",catalog:"#7a5a2b",tax_case:"#555"};
+const tcolor = (t) => COLORS[t] || "#8a8f98";
+let HIER = { tenants: [] }, STATE = {};
+const OPEN = new Set(); // aufgeklappte Projekt-Pfade (überlebt STATE-Reassignments)
+
+async function boot() {
+  try {
+    await refresh();
+    el("nav-overview").onclick = () => renderOverview();
+    el("filter").oninput = () => { if (STATE.view === "overview") renderOverview(el("filter").value); };
+    renderOverview();
+  } catch (e) { el("main").innerHTML = `<div class="err">gitchain-lite nicht erreichbar: ${esc(e)}<br>Start: <code>node gitchain-lite.mjs</code></div>`; }
+}
+async function refresh() {
+  HIER = await j("/api/hierarchy");
+  el("tcount").textContent = HIER.tenants.length;
+  el("tenants").innerHTML = HIER.tenants.map(t => `
+    <a data-tenant="${esc(t.slug)}"><span class="tname"><span class="iso ${t.isolation}"></span>${esc(t.name)}</span><span class="count">${t.container_count}</span></a>`).join("");
+  document.querySelectorAll("[data-tenant]").forEach(a => a.onclick = () => renderTenant(a.dataset.tenant));
+}
+function setNav(tenant) {
+  document.querySelectorAll("nav a").forEach(a => a.classList.remove("active"));
+  (tenant ? document.querySelector(`[data-tenant="${tenant}"]`) : el("nav-overview"))?.classList.add("active");
+}
+function crumb(parts) {
+  el("crumb").innerHTML = `<a data-c0>GitChain</a>` + parts.map((p,i) =>
+    `<span class="sep">/</span>` + (p.go ? `<a data-c="${i}">${esc(p.t)}</a>` : `<b>${esc(p.t)}</b>`)).join("");
+  el("crumb").querySelector("[data-c0]").onclick = () => renderOverview();
+  parts.forEach((p,i) => { if (p.go) el("crumb").querySelector(`[data-c="${i}"]`).onclick = p.go; });
+}
+
+// ---- Übersicht: alle Tenants als Karten ----
+function renderOverview(filter) {
+  STATE = { view: "overview" }; setNav(null);
+  crumb([]);
+  let ts = HIER.tenants;
+  if (filter) ts = ts.filter(t => (t.name+t.slug).toLowerCase().includes(filter.toLowerCase()));
+  el("main").innerHTML = `
+    <h1>Tenants <span class="badge">${ts.length}</span></h1>
+    <div class="sub">Jeder Tenant ist ein Client mit <b>harter Isolation</b> — Projekte und Container leben strukturell unter seinem Pfad.</div>
+    <div class="actionbar"><span class="btn" id="new-tenant">＋ Tenant</span></div>
+    <div class="cardgrid">${ts.map(t => `
+      <div class="card" data-t="${esc(t.slug)}">
+        <div class="ct"><span class="av" style="background:${tcolor(t.slug)}">${initial(t.name)}</span>${esc(t.name)}
+          <span class="isobadge ${t.isolation}">${t.isolation === "hard" ? "harte Isolation" : "weich"}</span></div>
+        <div class="cmeta"><span>📦 ${t.container_count} Container</span><span>🗂 ${t.project_count} Projekte</span></div>
+      </div>`).join("") || '<div class="empty">Noch keine Tenants. Lege einen an ↑</div>'}</div>`;
+  document.querySelectorAll("[data-t]").forEach(c => c.onclick = () => renderTenant(c.dataset.t));
+  el("new-tenant").onclick = () => modal("Neuen Tenant anlegen", [
+    { k:"slug", label:"Slug (Pfad, [A-Za-z0-9._-])", ph:"acme" },
+    { k:"name", label:"Anzeigename", ph:"ACME GmbH" },
+    { k:"isolation", label:"Isolation", type:"select", opts:["hard","soft"] },
+  ], async (v) => { await jpost("/api/tenants", v); await refresh(); renderTenant(v.slug); });
+}
+
+// ---- Tenant: Projekt-Baum + Root-Container + Actions ----
+function renderTenant(slug) {
+  const t = HIER.tenants.find(x => x.slug === slug);
+  if (!t) return renderOverview();
+  STATE = { view: "tenant", tenant: slug }; setNav(slug);
+  crumb([{ t: t.name }]);
+  el("main").innerHTML = `
+    <h1><span class="av" style="width:30px;height:30px;border-radius:6px;background:${tcolor(slug)};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;">${initial(t.name)}</span>
+      ${esc(t.name)} <span class="isobadge ${t.isolation}">${t.isolation === "hard" ? "harte Isolation" : "weich"}</span></h1>
+    <div class="sub">${t.project_count} Projekt(e) · ${t.container_count} Container · Tenant-Slug <code>${esc(slug)}</code></div>
+    <div class="actionbar">
+      <span class="btn" id="a-proj">＋ Projekt</span>
+      <span class="btn green" id="a-cont">＋ Container</span></div>
+    <h2>Projekte & Container</h2>
+    <div class="ptree" id="ptree">${renderNodes(slug, t.projects, t.root_containers, 0)}</div>`;
+  wireTree(slug);
+  el("a-proj").onclick = () => newProject(slug, "");
+  el("a-cont").onclick = () => newContainer(slug, "");
+}
+
+// Rekursiver Projekt/Container-Baum (nestbar). Aufklapp-Zustand in OPEN (Set der Pfade).
+function renderNodes(tenant, projects, containers, depth) {
+  const pad = 14 + depth * 18;
+  let html = "";
+  for (const p of projects) {
+    const open = OPEN.has(tenant + "/" + p.path);
+    html += `<div class="pnode">
+      <div class="prow project" data-proj="${esc(p.path)}" style="padding-left:${pad}px">
+        <span class="pl"><span class="tw" data-tw="${esc(p.path)}">${open ? "▾" : "▸"}</span>
+          <span class="ic" style="background:${tcolor(p.type||'')}">🗂</span>
+          <span class="nm"><b>${esc(p.name)}</b></span></span>
+        <span class="rt">${p.container_count} · ${esc(p.path)}</span></div>`;
+    if (open) html += `<div class="children">${renderNodes(tenant, p.projects, p.containers, depth + 1)}</div>`;
+    html += `</div>`;
+  }
+  for (const c of containers) {
+    const seg = c.path_with_namespace.split("/");
+    html += `<div class="prow container" data-open="${esc(c.path_with_namespace)}" style="padding-left:${pad + 14}px">
+      <span class="pl"><span class="ic" style="background:${tcolor(c.type||'')}">${esc((c.type||seg[seg.length-1]).charAt(0).toUpperCase())}</span>
+        <span class="nm">${esc(c.title || c.id)}</span>${c.type ? ` <span class="rt">${esc(c.type)}</span>` : ""}</span>
+      <span class="rt">📄 ${esc(c.id)}</span></div>`;
+  }
+  return html || `<div class="empty">leer — Projekt oder Container anlegen</div>`;
+}
+function wireTree(tenant) {
+  document.querySelectorAll("[data-tw]").forEach(tw => tw.onclick = (ev) => {
+    ev.stopPropagation(); const key = tenant + "/" + tw.dataset.tw;
+    OPEN.has(key) ? OPEN.delete(key) : OPEN.add(key);
+    el("ptree").innerHTML = renderNodes(tenant, HIER.tenants.find(x=>x.slug===tenant).projects, HIER.tenants.find(x=>x.slug===tenant).root_containers, 0);
+    wireTree(tenant);
+  });
+  document.querySelectorAll("[data-proj]").forEach(r => r.onclick = (ev) => { if (ev.target.dataset.tw !== undefined) return; renderProject(tenant, r.dataset.proj); });
+  document.querySelectorAll("[data-open]").forEach(r => r.onclick = () => openContainer(r.dataset.open));
+}
+
+// ---- Projekt-Ansicht: Unter-Projekte + Container + Actions ----
+function findProject(tenant, path) {
+  const t = HIER.tenants.find(x => x.slug === tenant); if (!t) return null;
+  let found = null; const walk = (ns) => { for (const n of ns) { if (n.path === path) found = n; else walk(n.projects); } };
+  walk(t.projects); return found ? { t, p: found } : null;
+}
+function renderProject(tenant, path) {
+  const r = findProject(tenant, path); if (!r) return renderTenant(tenant);
+  const { t, p } = r;
+  STATE = { view: "project", tenant, path }; setNav(tenant);
+  const segs = path.split("/");
+  const parts = [{ t: t.name, go: () => renderTenant(tenant) }];
+  segs.forEach((s, i) => { const sub = segs.slice(0, i+1).join("/"); parts.push(i < segs.length-1 ? { t: s, go: () => renderProject(tenant, sub) } : { t: p.name }); });
+  crumb(parts);
+  el("main").innerHTML = `
+    <h1><span class="ic" style="width:28px;height:28px;border-radius:6px;background:${tcolor(p.type||'')};color:#fff;display:inline-flex;align-items:center;justify-content:center;">🗂</span> ${esc(p.name)}</h1>
+    <div class="sub">${p.description ? esc(p.description) + " · " : ""}${p.container_count} Container · Pfad <code>${esc(tenant)}/${esc(path)}</code></div>
+    <div class="actionbar">
+      <span class="btn" id="a-sub">＋ Unter-Projekt</span>
+      <span class="btn green" id="a-cont">＋ Container</span></div>
+    <div class="ptree" id="ptree">${renderNodes(tenant, p.projects, p.containers, 0)}</div>`;
+  wireTree(tenant);
+  el("a-sub").onclick = () => newProject(tenant, path);
+  el("a-cont").onclick = () => newContainer(tenant, path);
+}
+
+function newProject(tenant, parentPath) {
+  modal(parentPath ? `Sub-project in ${tenant}/${parentPath}` : `New project in ${tenant}`, [
+    { k:"slug", label:"Slug (path segment)", ph:"hardware" },
+    { k:"name", label:"Display name", ph:"Hardware" },
+    { k:"description", label:"Description (optional)", ph:"" },
+  ], async (v) => {
+    const path = (parentPath ? parentPath + "/" : "") + v.slug;
+    await jpost("/api/projects", { tenant, path, name: v.name, description: v.description });
+    OPEN.add(tenant + "/" + (parentPath || path.split("/")[0]));
+    await refresh(); renderProject(tenant, path);
+  });
+}
+function newContainer(tenant, projectPath) {
+  modal(`Container in ${tenant}${projectPath ? "/" + projectPath : ""}`, [
+    { k:"id", label:"Container id (slug)", ph:"widget-3000" },
+    { k:"type", label:"Type", type:"select", opts:["","product","model","source","dataset","document","other"] },
+    { k:"title", label:"Title (optional)", ph:"Widget 3000" },
+  ], async (v) => {
+    const r = await jpost("/api/containers", { tenant, project: projectPath, id: v.id, type: v.type || null, title: v.title || null });
+    await refresh();
+    openContainer(r.container.path_with_namespace);
+  });
+}
+
+// ---- Modal ----
+function modal(title, fields, onSubmit) {
+  const bg = document.createElement("div"); bg.className = "modalbg";
+  bg.innerHTML = `<div class="modal"><h3>${esc(title)}</h3><div class="body">${fields.map(f =>
+    `<div class="fld"><label>${esc(f.label)}</label>${
+      f.type === "select"
+        ? `<select data-k="${f.k}">${f.opts.map(o => `<option value="${esc(o)}">${esc(o || "— (keiner) —")}</option>`).join("")}</select>`
+        : `<input data-k="${f.k}" placeholder="${esc(f.ph||"")}">`}</div>`).join("")}</div>
+    <div class="msg" id="modal-msg" style="display:none"></div>
+    <div class="foot"><span class="btn ghost" id="modal-cancel">Abbrechen</span><span class="btn green" id="modal-ok">Anlegen</span></div></div>`;
+  document.body.appendChild(bg);
+  const val = () => Object.fromEntries(fields.map(f => [f.k, bg.querySelector(`[data-k="${f.k}"]`).value.trim()]));
+  const close = () => bg.remove();
+  bg.querySelector("#modal-cancel").onclick = close;
+  bg.onclick = (e) => { if (e.target === bg) close(); };
+  bg.querySelector("[data-k]").focus();
+  bg.querySelector("#modal-ok").onclick = async () => {
+    const msg = bg.querySelector("#modal-msg");
+    try { await onSubmit(val()); close(); }
+    catch (e) { msg.style.display = "block"; msg.textContent = "Fehler: " + (typeof e === "string" ? e : JSON.stringify(e)); }
+  };
+}
+
+// ================= Container-Browse (N-Ebenen-Slug = path_with_namespace) =================
+async function openContainer(slug, ref) {
+  const seg = slug.split("/"); const tenant = seg[0], id = seg[seg.length-1];
+  STATE = { ...STATE, view: "container", slug, tenant };
+  const parts = [{ t: HIER.tenants.find(x=>x.slug===tenant)?.name || tenant, go: () => renderTenant(tenant) }];
+  seg.slice(1, -1).forEach((s, i) => { const p = seg.slice(1, 2+i).join("/"); parts.push({ t: s, go: () => renderProject(tenant, p) }); });
+  parts.push({ t: id });
+  crumb(parts);
+  el("main").innerHTML = `<div class="loading">Container lädt…</div>`;
+  try {
+    const refs = await j(`/git/${slug}/refs`);
+    ref = ref || refs.default_branch;
+    STATE.ref = ref;
+    const [tree, commits] = await Promise.all([ j(`/git/${slug}/tree?ref=${encodeURIComponent(ref)}`), j(`/git/${slug}/commits?ref=${encodeURIComponent(ref)}&limit=20`) ]);
+    const refchips = [...refs.branches.map(b => `<span class="refchip${b.protected?' prot':''}" data-ref="${esc(b.name)}">${esc(b.name)}</span>`),
+                      ...refs.tags.map(t => `<span class="refchip tag" data-ref="${esc(t.name)}">${esc(t.name)}</span>`)].join("");
+    const canCompare = (refs.branches.length + refs.tags.length) > 1;
+    const cloneUrl = `${API || location.origin}/git/${slug}.git`;
+    el("main").innerHTML = `
+      <h1><span class="ic" style="width:26px;height:26px;border-radius:6px;background:${tcolor(seg[1]||'')};color:#fff;display:inline-flex;align-items:center;justify-content:center;">📦</span> ${esc(id)}</h1>
+      <div class="sub">${refchips} &nbsp; <span style="color:#999">HEAD ${esc(commits.commits[0]?.short_id||"—")}</span>${canCompare?` &nbsp; <span style="color:#bbb;font-size:12px;">Alt-Klick auf Ref = vergleichen mit ${esc(ref)}</span>`:""}
+        &nbsp; <a class="mrlink" data-mrview>⇄ Merge Requests</a></div>
+      <div class="panel" style="padding:12px 16px;">
+        <div class="clone"><code id="cloneurl">git clone ${esc(cloneUrl)}</code><span class="copy" id="copyclone">kopieren</span></div>
+        <div class="note">Push (legt beim ersten Mal an): <code>git push ${esc(cloneUrl)} main</code></div></div>
+      <div class="cols">
+        <div class="tree" id="treebox">${tree.entries.map(e => `<div class="row ${e.type==='blob'?'file':''}" ${e.type==='blob'?`data-blob="${esc(e.path)}"`:''}>${e.type==='tree'?'📁':'📄'} ${esc(e.name)}<span class="stat">${e.size!=null?e.size+' B':''}</span></div>`).join("") || '<div class="empty">leerer Container — noch kein Commit gepusht</div>'}</div>
+        <div class="content">
+          <div class="panel"><h2 style="margin-bottom:10px;">Commits @<span style="color:#1f75cb;">${esc(ref)}</span> <span style="font-weight:400;color:#888;font-size:12px;">· ${commits.count}</span></h2>
+          ${commits.commits.map(c => `<div class="commitrow" data-commit="${c.id}">
+            <div class="avatar">${initial(c.author_name)}</div>
+            <div class="crmain"><div class="msg">${esc(c.title)}</div><div class="meta">${esc(c.author_name)} · ${new Date(c.created_at).toLocaleString('de-DE')}</div></div>
+            <div class="hash">${esc(c.short_id)}</div></div>`).join("") || '<div class="empty">keine Commits</div>'}
+          </div>
+          <div id="detail"></div>
+        </div></div>`;
+    el("copyclone").onclick = () => { navigator.clipboard?.writeText(`git clone ${cloneUrl}`); el("copyclone").textContent = "✓ kopiert"; };
+    document.querySelectorAll("[data-ref]").forEach(c => c.onclick = (ev) => ev.altKey ? showCompare(slug, ref, c.dataset.ref) : openContainer(slug, c.dataset.ref));
+    document.querySelectorAll("[data-mrview]").forEach(a => a.onclick = () => showMRs(slug, refs));
+    document.querySelectorAll("[data-commit]").forEach(c => c.onclick = () => showCommit(slug, c.dataset.commit));
+    document.querySelectorAll("[data-blob]").forEach(b => b.onclick = () => { document.querySelectorAll('[data-blob]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); showBlob(slug, ref, b.dataset.blob); });
+  } catch (e) { el("main").innerHTML = `<div class="err">${esc(e)}</div>`; }
+}
+
+async function showBlob(slug, ref, path) {
+  el("detail").innerHTML = `<div class="loading">Datei lädt…</div>`;
+  try {
+    const b = await j(`/git/${slug}/blob?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`);
+    el("detail").innerHTML = `<div class="filehead" style="border-radius:4px;border-bottom:1px solid #e9ecef;margin-top:8px;"><span>${esc(path)}</span>
+      <span class="links"><a href="${API}/git/${slug}/raw?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}" target="_blank">raw</a>· ${b.size} B</span></div>
+      <div class="codebox">${esc(b.content!=null ? b.content : '('+b.note+')')}</div>`;
+  } catch (e) { el("detail").innerHTML = `<div class="err">${esc(e)}</div>`; }
+}
+async function showCommit(slug, sha) {
+  el("detail").innerHTML = `<div class="loading">Diff lädt…</div>`;
+  try {
+    const d = await j(`/git/${slug}/commits/${sha}/diff`);
+    el("detail").innerHTML = `
+      <div class="commitheadbar" style="margin-top:8px;"><div><b>Commit ${esc(d.commit.short_id)}</b> · ${esc(d.commit.author_name)} · ${new Date(d.commit.created_at).toLocaleString('de-DE')}</div></div>
+      <h2 style="margin-top:12px;">${esc(d.commit.title)}</h2>
+      <div class="panel" style="margin-top:8px;">
+        <div class="metarow">⑂ parent ${d.commit.parent_ids.map(p=>`<span class="hashlink">${p.slice(0,8)}</span>`).join(", ")||"—"}</div>
+        <div class="metarow">🌿 ${esc(STATE.ref)}</div></div>
+      <div class="diffstats" style="margin:10px 0;">${d.stats.files_changed} Dateien geändert &nbsp; <span class="plus">+${d.stats.additions}</span> <span class="minus">-${d.stats.deletions}</span></div>
+      ${renderPatch(d.patch)}`;
+  } catch (e) { el("detail").innerHTML = `<div class="err">${esc(e)}</div>`; }
+}
+async function showCompare(slug, from, to) {
+  el("detail").innerHTML = `<div class="loading">Vergleich ${esc(from)} … ${esc(to)} lädt…</div>`;
+  try {
+    const c = await j(`/git/${slug}/compare?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    const add = c.files.reduce((a,f)=>a+(f.additions||0),0), del = c.files.reduce((a,f)=>a+(f.deletions||0),0);
+    el("detail").innerHTML = `
+      <div class="commitheadbar" style="margin-top:8px;"><div><b>Vergleich</b> <span class="refchip">${esc(from)}</span> … <span class="refchip">${esc(to)}</span></div></div>
+      <div class="sub" style="margin-top:10px;">${c.commits.length} Commit(s) Unterschied &nbsp; <span class="diffstats">${c.files.length} Dateien <span class="plus">+${add}</span> <span class="minus">-${del}</span></span></div>
+      ${c.patch ? renderPatch(c.patch) : '<div class="panel">Keine Datei-Unterschiede.</div>'}`;
+  } catch (e) { el("detail").innerHTML = `<div class="err">${esc(e)}</div>`; }
+}
+function renderPatch(patch) {
+  const files = patch.split(/^diff --git /m).filter(Boolean);
+  return files.map(chunk => {
+    const lines = ("diff --git " + chunk).split("\n");
+    const plusHead = lines.find(l => l.startsWith("+++ b/"));
+    const name = plusHead ? plusHead.replace("+++ b/", "").trim() : (lines[0].replace("diff --git a/","").split(" ")[0]);
+    let rows = "", oldn = 0, newn = 0, plus = 0, minus = 0;
+    for (const l of lines) {
+      if (l.startsWith("@@")) { const m = l.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/); if (m) { oldn = +m[1]; newn = +m[2]; } rows += `<tr class="hunk"><td class="ln"></td><td class="ln"></td><td class="code">${esc(l)}</td></tr>`; continue; }
+      if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("diff --git") || l.startsWith("index ") || l.startsWith("new file") || l.startsWith("deleted file") || l.startsWith("similarity ") || l.startsWith("rename ") || l.startsWith("\\ No newline")) continue;
+      if (l.startsWith("+")) { rows += `<tr class="add"><td class="ln"></td><td class="ln">${newn++}</td><td class="code">${esc(l.slice(1))}</td></tr>`; plus++; }
+      else if (l.startsWith("-")) { rows += `<tr class="del"><td class="ln">${oldn++}</td><td class="ln"></td><td class="code">${esc(l.slice(1))}</td></tr>`; minus++; }
+      else if (l.length) { rows += `<tr class="ctx"><td class="ln">${oldn++}</td><td class="ln">${newn++}</td><td class="code">${esc(l.slice(1))}</td></tr>`; }
+    }
+    return `<div class="filehead"><span>${esc(name)}</span><span class="diffstats"><span class="plus">+${plus}</span> <span class="minus">-${minus}</span></span></div><table class="diff"><tbody>${rows}</tbody></table>`;
+  }).join("");
+}
+
+// ---- Merge Requests (optional; require a full GitChain server — lite shows a hint) ----
+async function showMRs(slug, refs) {
+  crumb([{ t: STATE.tenant, go: () => renderTenant(STATE.tenant) }, { t: slug.split("/").pop(), go: () => openContainer(slug) }, { t: "Merge Requests" }]);
+  el("main").innerHTML = `<div class="loading">Merge Requests laden…</div>`;
+  try {
+    const [open, merged] = await Promise.all([ j(`/git/${slug}/merge-requests?state=open`), j(`/git/${slug}/merge-requests?state=merged`) ]);
+    const proposalBranches = (refs?.branches || []).filter(b => b.name.startsWith("proposals/"));
+    const row = (m) => `<div class="mrrow ${m.state==='merged'?'merged':(m.source_stale?'stale':'')}" data-mr="${esc(m.id)}">
+        <div class="mrico">${m.state==='merged'?'✓':'⇄'}</div>
+        <div class="mrmain"><div class="mrtitle">${esc(m.title)}</div>
+          <div class="mrmeta"><span class="refchip">${esc(m.sourceBranch)}</span> → <span class="refchip">${esc(m.targetBranch)}</span> · ${esc(m.proposer)}${m.merged_by?` · merged von ${esc(m.merged_by)}`:''}</div></div>
+        <span class="mrstate ${m.state}">${m.state}</span></div>`;
+    el("main").innerHTML = `
+      <h1>Merge Requests <span class="badge">${open.count} offen</span></h1>
+      <div class="sub"><a class="mrlink" data-back>← zurück zum Container</a> · ${esc(slug)}</div>
+      ${renderAtomForm(slug, proposalBranches)}
+      <div class="panel"><h2 style="margin-bottom:6px;">Offen · ${open.count}</h2>
+        ${open.count ? open.merge_requests.map(row).join("") : '<div class="note" style="padding:10px 2px;">Keine offenen Merge Requests.</div>'}</div>
+      <div class="panel"><h2 style="margin-bottom:6px;">Gemergt · ${merged.count}</h2>
+        ${merged.count ? merged.merge_requests.map(row).join("") : '<div class="note" style="padding:10px 2px;">—</div>'}</div>
+      <div id="mrdetail"></div>`;
+    document.querySelector("[data-back]").onclick = () => openContainer(slug);
+    document.querySelectorAll("[data-mr]").forEach(r => r.onclick = () => showMRDiff(slug, r.dataset.mr, refs));
+    wireAtomForm(slug, refs);
+  } catch (e) {
+    el("main").innerHTML = `<h1>Merge Requests</h1><div class="sub"><a class="mrlink" data-back>← zurück</a></div>
+      <div class="panel note">Merge Requests / four-eyes review are provided by a full GitChain server.
+      gitchain-lite is the pure git core (clone/push/pull + browse); to use MRs, point the API base at your server via <code>?api=https://your-host</code>.</div>`;
+    document.querySelector("[data-back]").onclick = () => openContainer(slug);
+  }
+}
+function renderAtomForm(slug) {
+  return `<div class="atomform"><h3>⚛ Merge Request aus Atom-Vorschlag erzeugen</h3>
+    <div class="grid">
+      <label>SNR</label><input id="af-snr" placeholder="7739619001" value="7739619001">
+      <label>ETIM-Feature (EF)</label><input id="af-ef" placeholder="EF000123" value="EF000123">
+      <label>Wert</label><input id="af-value" placeholder="55">
+      <label>DV-Typ</label><input id="af-dv" placeholder="N | L | A | R" value="N">
+      <label>Evidenz</label><input id="af-ev" placeholder="glyph_box p12">
+      <label>Proposer</label><input id="af-proposer" placeholder="analyst-a" value="analyst-a"></div>
+    <div class="actions"><span class="btn green" id="af-go">create proposals branch + MR</span>
+      <span class="note">requires a full GitChain server</span></div>
+    <div class="note" id="af-msg" style="margin-top:8px;"></div></div>`;
+}
+function wireAtomForm(slug, refs) {
+  const go = el("af-go"); if (!go) return;
+  go.onclick = async () => {
+    const snr = el("af-snr").value.trim(), ef = el("af-ef").value.trim(), value = el("af-value").value.trim();
+    const dv = el("af-dv").value.trim().toUpperCase(), evidence = el("af-ev").value.trim(), proposer = el("af-proposer").value.trim();
+    const msg = el("af-msg");
+    if (!ef || !value || !proposer) { msg.className = "note warn"; msg.textContent = "EF, Wert und Proposer sind Pflicht."; return; }
+    msg.className = "note"; msg.textContent = "lege Vorschlag an…";
+    const branch = `proposals/${ef.toLowerCase()}-${Date.now().toString(36)}`;
+    const atom = { snr, ef, value, DVType: dv || undefined, evidence };
+    const content = JSON.stringify({ snr, ef, value, DVType: dv || "A", evidence }) + "\n";
+    try {
+      await jpost(`/git/${slug}/proposals`, { branch, files: [{ path: `atoms/${ef}.json`, content }], message: `proposal: ${ef} = ${value} (evidence: ${evidence||'—'})`, author: { name: proposer, email: proposer.replace(/[^A-Za-z0-9._-]/g,'_')+"@example.com" } });
+      const r = await jpost(`/git/${slug}/merge-requests`, { title: `${ef} = ${value}`, sourceBranch: branch, targetBranch: (refs?.default_branch === "master" ? "master" : "main"), proposer, atom });
+      msg.className = "note"; msg.textContent = `MR ${r.merge_request.id} angelegt.`;
+      const fresh = await j(`/git/${slug}/refs`); showMRs(slug, fresh);
+    } catch (e) { msg.className = "note warn"; msg.textContent = "Error (requires a full GitChain server): " + (typeof e === "string" ? e : JSON.stringify(e)); }
+  };
+}
+async function showMRDiff(slug, mrid, refs) {
+  const box = el("mrdetail"); box.innerHTML = `<div class="loading">MR-Diff lädt…</div>`;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  try {
+    const d = await j(`/git/${slug}/merge-requests/${mrid}/diff`);
+    const add = d.files.reduce((a,f)=>a+(f.additions||0),0), del = d.files.reduce((a,f)=>a+(f.deletions||0),0);
+    const canApply = d.merge_request.state === "open";
+    box.innerHTML = `
+      <div class="commitheadbar" style="margin-top:14px;"><div><b>${esc(d.merge_request.title)}</b> · <span class="mrstate ${d.merge_request.state}">${d.merge_request.state}</span></div>
+        <div class="diffstats"><span class="refchip">${esc(d.source)}</span> → <span class="refchip">${esc(d.target)}</span></div></div>
+      <div class="sub" style="margin-top:10px;">Proposer <b>${esc(d.merge_request.proposer)}</b> · ${d.commits.length} Commit(s) · <span class="diffstats">${d.files.length} Dateien <span class="plus">+${add}</span> <span class="minus">-${del}</span></span></div>
+      ${canApply ? `<div class="reviewbar"><input id="mr-reviewer" placeholder="Reviewer (≠ Proposer)">
+        <span class="btn green" id="mr-apply">✓ Vier-Augen mergen</span><span class="note" id="mr-applymsg"></span></div>` : ''}
+      ${d.patch ? renderPatch(d.patch) : '<div class="panel">Keine Datei-Unterschiede.</div>'}`;
+    if (canApply) el("mr-apply").onclick = async () => {
+      const reviewer = el("mr-reviewer").value.trim(), m = el("mr-applymsg");
+      if (!reviewer) { m.className = "note warn"; m.textContent = "Reviewer angeben."; return; }
+      m.className = "note"; m.textContent = "merge…";
+      try { const r = await jpost(`/git/${slug}/merge-requests/${mrid}/apply`, { reviewer });
+        m.className = "note"; m.textContent = `gemergt → ${r.merge_commit.slice(0,8)}`;
+        const fresh = await j(`/git/${slug}/refs`); setTimeout(() => showMRs(slug, fresh), 700);
+      } catch (e) { m.className = "note warn"; m.textContent = (typeof e === "string" ? e : JSON.stringify(e)); }
+    };
+  } catch (e) { box.innerHTML = `<div class="err">${esc(e)}</div>`; }
+}
+
+boot();
+</script>
+</body></html>

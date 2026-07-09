@@ -1,0 +1,16 @@
+{
+  "name": "gitchain-lite-api",
+  "version": "0.1.0",
+  "description": "Sovereign, git-native container server + local ingest + grounded query + integration (MCP, RAG proxy). Zero-dependency.",
+  "license": "UNLICENSED",
+  "private": true,
+  "bin": { "gitchain-lite": "gitchain-lite.mjs" },
+  "scripts": {
+    "start": "node gitchain-lite.mjs",
+    "up": "./gitchain-up.sh",
+    "mcp": "node gitchain-mcp.mjs",
+    "proxy": "node gitchain-rag-proxy.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {}
+}
