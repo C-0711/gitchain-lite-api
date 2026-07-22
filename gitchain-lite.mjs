@@ -290,7 +290,7 @@ async function embedOne(text, model) {
   return (await r.json()).data[0].embedding;
 }
 async function chatAnswer(q, matches) {
-  const ctx = matches.map((m, i) => `[${i + 1}] ${m.text}`).join("\n\n");
+  const ctx = matches.map((m, i) => `[${i + 1}]${m.source ? ` (Quelle: ${m.source})` : ""} ${m.text}`).join("\n\n"); // Quelle mitgeben: sonst kann das Modell gleichartige Dokumente nicht auseinanderhalten
   const prompt = `Use ONLY the context to answer; cite sources as [n]. If it isn't in the context, say so.\n\nContext:\n${ctx}\n\nQuestion: ${q}`;
   const r = await fetch(CHAT_URL, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "local", messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: 512 }) });

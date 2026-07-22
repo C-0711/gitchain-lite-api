@@ -115,11 +115,35 @@ def detect_table(glyphs, W, H):
             if x<b: return i
         return K-1
     def cell_text(seg):
-        sub=sorted(seg,key=lambda g:(round((g["y"]+g["h"]/2.0)/(0.7*mh)),g["x"])); t=""
-        for k,g in enumerate(sub):
-            # Leerzeichen an Glyphs eigenen Wortgrenzen (wpos==0) ODER an sichtbarer x-Lücke
-            if k>0 and (g.get("wpos")==0 or (g["x"]-(sub[k-1]["x"]+sub[k-1]["w"]))>0.55*mw): t+=" "
-            t+=g["label"]
+        # Sub-Ordnung entlang der PDF-EIGENEN Zeilenstruktur (block/zeile aus from_pdf) statt
+        # rein geometrisch: eng gesetzte Umbruch-Zeilen ÜBERLAPPEN vertikal (Descender), jede
+        # y-Schwelle verschränkt sie dann mitten im Wort ("B.ru utntoda 1rb0e.itslohn").
+        # Gruppen = Text-Layer-Zeilen; visuelle Ordnung: Gruppen nach y clustern, in der
+        # visuellen Zeile nach x. Glyphen OHNE zeile-Key (Scan/MLP-Pfad) fallen aufs alte
+        # y-Raster zurück — Verhalten dort unverändert.
+        groups={}
+        for g in seg:
+            z=g.get("zeile"); key=(g.get("block"),z) if z is not None else (None,round((g["y"]+g["h"]/2.0)/(0.7*mh)))
+            groups.setdefault(key,[]).append(g)
+        gl=[]
+        for gs in groups.values():
+            ys=[g["y"]+g["h"]/2.0 for g in gs]
+            gl.append({"yc":sum(ys)/len(ys),"h":float(np.median([g["h"] for g in gs])) or mh,
+                       "x0":min(g["x"] for g in gs),"gs":sorted(gs,key=lambda g:g["x"])})
+        gl.sort(key=lambda G:G["yc"])
+        vlines=[[gl[0]]]
+        for G in gl[1:]:
+            if G["yc"]-vlines[-1][-1]["yc"]>0.45*min(G["h"],vlines[-1][-1]["h"]): vlines.append([G])
+            else: vlines[-1].append(G)
+        t=""
+        for vl in vlines:
+            for G in sorted(vl,key=lambda G:G["x0"]):
+                sub=G["gs"]
+                if t: t+=" "
+                for k,g in enumerate(sub):
+                    # Leerzeichen an Glyphs eigenen Wortgrenzen (wpos==0) ODER an sichtbarer x-Lücke
+                    if k>0 and (g.get("wpos")==0 or (g["x"]-(sub[k-1]["x"]+sub[k-1]["w"]))>0.55*mw): t+=" "
+                    t+=g["label"]
         return t.strip()
     out_rows=[]
     for i in sorted(k for k in R if k>=0):
