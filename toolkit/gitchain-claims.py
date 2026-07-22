@@ -134,15 +134,17 @@ def glyph_vals(path):
     return vals
 
 
-RE_SEMI = re.compile(r"(\d);(\d{2})\b")        # Dezimal-";" statt "," (13585;13)
-RE_PIPE = re.compile(r"(\d)\s*\|\s*(\d{2})\b")  # Euro|Cent durch Tabellenstrich getrennt (37315 | 69)
-RE_EURSYM = re.compile(r"\s*(?:€|EUR)\b")       # nachlaufendes Waehrungssymbol (43.296,32 €)
+RE_SEMI = re.compile(r"(\d);(\d{2})\b")            # Dezimal-";" statt "," (13585;13)
+RE_PIPE = re.compile(r"(\d)\s*\|\s*(\d{2})\b")      # Euro|Cent durch Tabellenstrich getrennt (37315 | 69)
+RE_EURSYM = re.compile(r"\s*€|\s*\bEUR\b")          # nachlaufendes Waehrungssymbol (43.296,32 €); KEIN \b nach €
+RE_DOTDEC = re.compile(r"(\d{1,3}(?:\.\d{3})+)\.(\d{2})\b")  # Punkt auch als Dezimaltrenner (28.121.23)
 
 def repair(d):
     for l in d.lines:
         l.text = RE_EURSYM.sub("", l.text)
         l.text = RE_SEMI.sub(r"\1,\2", l.text)
         l.text = RE_PIPE.sub(r"\1,\2", l.text)
+        l.text = RE_DOTDEC.sub(r"\1,\2", l.text)
         l.text = RE_FIX.sub(r"\1,\2", l.text)
         l.text = RE_FIXSP.sub(r"\1,\2", l.text)
         m = RE_CENTSEG.match(l.text.strip())
