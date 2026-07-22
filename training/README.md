@@ -22,3 +22,15 @@ Gemessen (138 Text-Layer-PDFs der Testmenge): 308.254 gelabelte Glyphen, 131 Kla
 12 Epochen from scratch, ohne Augmentierung → 73% Val-Glyphen-Accuracy (steigend).
 Naechste Schritte fuer Produktionsguete: Augmentierung (Scan-Rauschen/Blur/Rotation gegen
 die Domain-Luecke Render→Scan), mehr Epochen, dann Test gegen die GT der Scan-Belege.
+
+## Ehrlicher Befund: Scans sind segmentierungs-, nicht klassifikator-limitiert
+
+Gemessen (12 Scan-LStB, CC-Segmenter + MLP, GT-Bruttolohn im gelesenen Text):
+shipped glyph_clf **3/12**, Testmengen-trained **3/12** — der trainierte Klassifikator
+schlaegt den alten NICHT. Der Engpass ist der **Segmenter** (connected-components
+verschmilzt/spaltet Glyphen VOR der Klassifikation), nicht die Klassifikation. Deckt sich
+mit dem glyph-mapper-V2-Befund ("der eigentliche Fehler ist der CC-Containerizer, nicht
+Geometrie/Licht"). Der trainierte Klassifikator ist also die notwendige, aber nicht
+hinreichende Zutat — Produktions-Scan-Lesen braucht zuerst einen pitch/gitter-basierten
+Segmenter. Bis dahin deckt die Claims-Pipeline die Text-Layer-Belege ab (60/106 LStB);
+Scans bleiben dokumentierte Luecke.
