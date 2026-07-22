@@ -301,7 +301,13 @@ async function chatAnswer(q, matches) {
 // Load a container's vectors as fp32 (L2-normalized, chunk order). Prefers the raw .brain/vectors.f32
 // blob; if the container is a TurboQuant store (only vectors_tq.npz), decode-on-open via numpy
 // tq_decode and cache the fp32 by HEAD sha (so a container quantized at rest is still queryable).
-const _vecCache = new Map(); // `${repo}|${sha}` -> Float32Array
+const _vecCache = new Map(); // `${repo}|${sha}` -> Float32Array  (pro Repo nur der aktuelle HEAD; max 8 Container resident)
+const VEC_CACHE_MAX = Number(process.env.VEC_CACHE_MAX || 8);
+function vecCachePut(repo, key, vecs) {
+  for (const k of _vecCache.keys()) if (k.startsWith(repo + "|") && k !== key) _vecCache.delete(k); // alter HEAD desselben Repos
+  _vecCache.set(key, vecs);
+  while (_vecCache.size > VEC_CACHE_MAX) _vecCache.delete(_vecCache.keys().next().value); // LRU: ältester Eintrag
+}
 const catBlob = (repo, path) =>
   execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `HEAD:${path}`], { maxBuffer: 512 << 20 });
 const blobExists = (repo, path) => {
@@ -317,14 +323,14 @@ function loadContainerVectors(repo, index) {
   const sha = git(repo, ["rev-parse", "HEAD"]).trim();
   const key = `${repo}|${sha}`;
   const hit = _vecCache.get(key);
-  if (hit) return hit;
+  if (hit) { _vecCache.delete(key); _vecCache.set(key, hit); return hit; } // LRU-Touch
   const cacheDir = join(REPO_BASE, ".cache"); mkdirSync(cacheDir, { recursive: true });
   const npz = join(cacheDir, `${sha.slice(0, 16)}.npz`);
   writeFileSync(npz, catBlob(repo, ".brain/vectors_tq.npz"));
   let vecs;
   try { vecs = asF32(execFileSync(PYTHON_BIN, [join(TOOLKIT_DIR, "tq_decode.py"), "--raw", npz], { maxBuffer: 512 << 20 })); }
   finally { try { unlinkSync(npz); } catch {} }
-  _vecCache.set(key, vecs);
+  vecCachePut(repo, key, vecs);
   console.log(`  decode-on-open: ${store} → ${vecs.length} floats  (${repo.split("/").slice(-3).join("/")})`);
   return vecs;
 }
@@ -449,7 +455,12 @@ createServer(async (req, res) => {
         const kind = g[2], repo = resolveRepo(parseSegs(g[1]));
         if (!repo) return send(404, { error: "repository not found" });
         const q = Object.fromEntries(u.searchParams);
-        if (kind === "raw") { const buf = execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `${q.ref || "HEAD"}:${q.path}`], { maxBuffer: 256 << 20 }); res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(buf); }
+        if (kind === "raw") {
+          const ref = q.ref || "HEAD";
+          if (!okRef(ref) || !okPath(q.path) || !q.path) throw 400; // wie blob(): kein "-"-Prefix → keine git-Option-Injection
+          const buf = execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `${ref}:${q.path}`], { maxBuffer: 256 << 20 });
+          res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(buf);
+        }
         return send(200, obj[kind](repo, q));
       }
     }
