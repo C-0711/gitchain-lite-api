@@ -335,29 +335,89 @@ function loadContainerVectors(repo, index) {
   return vecs;
 }
 
+// ---- BM25 lexical twin (zero-dep): search works with NO models configured; when EMBED_URL
+// is set, dense and lexical ranks are fused (reciprocal-rank fusion). Exact terms (names,
+// IDs, amounts) are lexical strengths a small embedder misses — fusion beats either alone.
+const _bmCache = new Map(); // `${repo}|${sha}` -> {tf, len, df, avg, N}
+const BM_CACHE_MAX = Number(process.env.VEC_CACHE_MAX || 8);
+const _tok = (s) => String(s).toLowerCase().replace(/ß/g, "ss").match(/[a-zà-ÿä-ü]{2,}|\d+/g) || [];
+function bmIndex(repo, sha, texts) {
+  const key = `${repo}|${sha}`;
+  const hit = _bmCache.get(key);
+  if (hit) { _bmCache.delete(key); _bmCache.set(key, hit); return hit; }
+  const tf = [], len = [], df = new Map();
+  for (const t of texts) {
+    const m = new Map();
+    const ws = _tok(t);
+    for (const w of ws) m.set(w, (m.get(w) || 0) + 1);
+    for (const w of m.keys()) df.set(w, (df.get(w) || 0) + 1);
+    tf.push(m); len.push(ws.length);
+  }
+  const idx = { tf, len, df, avg: len.reduce((a, b) => a + b, 0) / Math.max(1, len.length), N: texts.length };
+  for (const k of _bmCache.keys()) if (k.startsWith(repo + "|") && k !== key) _bmCache.delete(k);
+  _bmCache.set(key, idx);
+  while (_bmCache.size > BM_CACHE_MAX) _bmCache.delete(_bmCache.keys().next().value);
+  return idx;
+}
+function bm25Ranks(idx, q, topn) {
+  const s = new Float32Array(idx.N);
+  for (const w of new Set(_tok(q))) {
+    const df = idx.df.get(w); if (!df) continue;
+    const idf = Math.log(1 + (idx.N - df + 0.5) / (df + 0.5));
+    for (let i = 0; i < idx.N; i++) {
+      const f = idx.tf[i].get(w);
+      if (f) s[i] += idf * f * 2.5 / (f + 1.5 * (0.25 + 0.75 * idx.len[i] / idx.avg));
+    }
+  }
+  return [...s.keys()].filter((i) => s[i] > 0).sort((a, b) => s[b] - s[a]).slice(0, topn);
+}
+const rrfFuse = (lists, k = 60) => {
+  const s = new Map();
+  for (const l of lists) l.forEach((i, r) => s.set(i, (s.get(i) || 0) + 1 / (k + r + 1)));
+  return [...s.keys()].sort((a, b) => s.get(b) - s.get(a));
+};
+
 // Semantic search over ONE container's own .brain vectors (fp32, or TurboQuant decode-on-open). No index DB.
 async function queryContainer(b) {
   const q = String(b.q || "").trim(); if (!q) throw 400;
   const container = String(b.container || "").trim();
   const segs = container.startsWith("0711:") ? container.slice(5).split(":") : parseSegs(container);
   const repo = resolveRepo(segs, false);
-  if (!repo) return { error: "container not found" };
-  if (!EMBED_URL) return { error: "EMBED_URL not configured (local embeddings)" };
+  if (!repo) return { error: "container not found", hint: "GET /git/repos listet alle Container; Pfad = tenant/projekt/id" };
   let index; try { index = JSON.parse(git(repo, ["show", "HEAD:.brain/index.json"])); }
-  catch { return { error: "container not built yet (no .brain/index.json)" }; }
+  catch { return { error: "container not built yet (no .brain/index.json)", hint: "push docs/ + .gitchain/ingest.json (mode:build) — oder data/chunks.jsonl + .brain/index.json direkt committen (BM25 braucht keine Vektoren)" }; }
   const order = index.order || [], dims = index.dims || 768, chunks = {};
   try { for (const l of git(repo, ["show", "HEAD:data/chunks.jsonl"]).split("\n")) if (l.trim()) { const c = JSON.parse(l); chunks[c.id] = c; } } catch {}
-  const vecs = loadContainerVectors(repo, index);
-  const n = Math.min(order.length, Math.floor(vecs.length / dims));
-  const qv = await embedOne(q, index.model);
-  let qn = 0; for (let i = 0; i < dims; i++) qn += qv[i] * qv[i]; qn = Math.sqrt(qn) || 1;
+  const sha = git(repo, ["rev-parse", "HEAD"]).trim();
+  const texts = order.map((id) => (chunks[id] && chunks[id].text) || "");
   const k = Math.min(Math.max(1, Number(b.k) || 8), 30);
-  const scored = [];
-  for (let r = 0; r < n; r++) { let dot = 0; const off = r * dims; for (let i = 0; i < dims; i++) dot += qv[i] * vecs[off + i]; scored.push([r, dot / qn]); }
-  scored.sort((a, b) => b[1] - a[1]);
-  const matches = scored.slice(0, k).map(([r, s]) => { const id = order[r], c = chunks[id] || {}; return { score: +s.toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) }; });
-  const out = { container: segs.join("/"), q, count: n, matches };
+  const scores = new Map();                    // idx -> dense cosine (nur fürs Anzeigen)
+  let denseRanks = null;
+  if (EMBED_URL) {
+    try {
+      const vecs = loadContainerVectors(repo, index);
+      const n = Math.min(order.length, Math.floor(vecs.length / dims));
+      if (n > 0) {
+        const qv = await embedOne(q, index.model);
+        let qn = 0; for (let i = 0; i < dims; i++) qn += qv[i] * qv[i]; qn = Math.sqrt(qn) || 1;
+        const scored = [];
+        for (let r = 0; r < n; r++) { let dot = 0; const off = r * dims; for (let i = 0; i < dims; i++) dot += qv[i] * vecs[off + i]; scored.push([r, dot / qn]); }
+        scored.sort((a, b) => b[1] - a[1]);
+        for (const [r, s] of scored) scores.set(r, s);
+        denseRanks = scored.map(([r]) => r).slice(0, 100);
+      }
+    } catch (e) { console.error("dense path unavailable, lexical only:", String((e && e.message) || e)); }
+  }
+  const lexRanks = bm25Ranks(bmIndex(repo, sha, texts), q, 100);
+  const ranked = denseRanks ? rrfFuse([denseRanks, lexRanks]) : lexRanks;
+  const mode = denseRanks ? "dense+bm25 (rrf)" : "bm25 (kein EMBED_URL noetig)";
+  const matches = ranked.slice(0, k).map((r) => {
+    const id = order[r], c = chunks[id] || {};
+    return { score: +((scores.get(r) ?? 0)).toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) };
+  });
+  const out = { container: segs.join("/"), q, count: order.length, mode, matches };
   if (b.answer && CHAT_URL) { try { out.answer = await chatAnswer(q, matches); } catch (e) { out.answer_error = String((e && e.message) || e); } }
+  else if (b.answer) out.answer_hint = "CHAT_URL setzen (OpenAI-kompatible /v1/chat/completions) fuer lokale Antworten — Treffer kommen auch ohne";
   return out;
 }
 
@@ -368,6 +428,44 @@ function readJson(req) {
     req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch { reject(400); } });
     req.on("error", reject);
   });
+}
+
+// ---- --doctor: Setup-Selbsttest (npm run doctor) --------------------------------------
+async function doctor() {
+  const rows = [];
+  const add = (ok, what, hint) => rows.push([ok, what, hint]);
+  add(Number(process.versions.node.split(".")[0]) >= 18, `Node ${process.versions.node}`, "Node >= 18 installieren (nodejs.org)");
+  try { add(true, execFileSync("git", ["--version"], { encoding: "utf8" }).trim(), ""); }
+  catch { add(false, "git", "git installieren — Kernvoraussetzung"); }
+  try { mkdirSync(REPO_BASE, { recursive: true }); writeFileSync(join(REPO_BASE, ".doctor"), "ok"); unlinkSync(join(REPO_BASE, ".doctor"));
+    add(true, `REPO_BASE beschreibbar (${REPO_BASE}, ${listRepos().length} Container)`, ""); }
+  catch { add(false, `REPO_BASE ${REPO_BASE}`, "Pfad anlegen/Rechte pruefen oder REPO_BASE_PATH setzen"); }
+  const probe = async (url, what, optionalHint) => {
+    if (!url) { add(null, `${what}: nicht gesetzt`, optionalHint); return; }
+    try { const c = new AbortController(); const t = setTimeout(() => c.abort(), 3000);
+      const r = await fetch(url, { method: "POST", signal: c.signal, headers: { "Content-Type": "application/json" }, body: "{}" });
+      clearTimeout(t); add(r.status < 500 || r.status === 500, `${what}: erreichbar (${url})`, ""); }
+    catch { add(false, `${what}: ${url} NICHT erreichbar`, "Modellserver starten oder Variable leeren (BM25 laeuft ohne)"); }
+  };
+  await probe(EMBED_URL, "EMBED_URL (dense Suche)", "optional — Suche laeuft lexikalisch (BM25) auch ohne");
+  await probe(CHAT_URL, "CHAT_URL (Antworten)", "optional — /api/v1/query liefert auch ohne Antworttext Treffer");
+  try { execFileSync(PYTHON_BIN, ["-c", "import numpy, fitz"], { stdio: "ignore" });
+    add(true, `${PYTHON_BIN} + numpy + pymupdf (Ingest-Reader)`, ""); }
+  catch { add(null, `${PYTHON_BIN}: numpy/pymupdf fehlen`, "optional — nur fuer PDF-Ingest: pip3 install numpy pymupdf"); }
+  add(existsSync(join(TOOLKIT_DIR, "tq_decode.py")), `Toolkit (${TOOLKIT_DIR})`, "TOOLKIT_DIR pruefen — noetig fuer TurboQuant-Container");
+  let core = true;
+  console.log("\n  gitchain-lite doctor\n");
+  for (const [ok, what, hint] of rows) {
+    const mark = ok === true ? "\x1b[32m✓\x1b[0m" : ok === false ? "\x1b[31m✗\x1b[0m" : "\x1b[33m○\x1b[0m";
+    console.log(`  ${mark} ${what}${hint && ok !== true ? `\n      → ${hint}` : ""}`);
+    if (ok === false && !what.includes("EMBED") && !what.includes("CHAT") && !what.includes("numpy")) core = false;
+  }
+  console.log(core ? "\n  Kern OK — Server starten mit: npm start  (Demo: npm run demo)\n"
+                   : "\n  Kernvoraussetzungen fehlen (s.o.) — erst beheben, dann npm start.\n");
+  return core;
+}
+if (process.argv.includes("--doctor")) {
+  process.exit((await doctor()) ? 0 : 1);
 }
 
 // ---- HTTP-Router ----------------------------------------------------------------------
