@@ -163,9 +163,20 @@ def repair(d):
     d.text = "\n".join(l.text for l in d.lines)
 
 
+RE_ADDR = re.compile(r"^(.{3,60}?)\s*[/,]\s*(?:Postfach|\d{5}|[A-ZÄÖÜ][a-zäöü]+str)")  # "Name / PLZ Ort / Str"
+
+def _clean_emp(s):
+    s = re.sub(r"\s*[/,]\s*(Postfach|\d{5}).*$", "", s).strip(" /,-|")
+    return s[:60] if len(s) >= 3 else None
+
 def employer_of(d):
-    """Arbeitgeber deterministisch. a) Anker 'des Arbeitgebers' -> naechste Zeile(n) darunter.
-    b) Tabellenform 'Name des Arbeitgebers | X' in derselben Zeile. c) RE_FIRM."""
+    """Arbeitgeber deterministisch, mehrstufig:
+    a) Anker 'Anschrift...Arbeitgebers' / 'Arbeitgeber/...Betriebsstaette' -> Namenszeile darunter
+       (Fenster bis 130px, ueberspringt Ziffern/Label-Zeilen).
+    b) 'Name des Arbeitgebers | X' in derselben Zeile.
+    c) Kopf-Adressblock (y<480): 'Bayer AG Leverkusen / 51373 ...' -> Teil vor PLZ/Postfach.
+    d) RE_FIRM. Liefert None, wenn nichts Sinnvolles."""
+    LAB = ("firma", "herr", "frau", "name", "steuernummer", "anschrift", "arbeitgeber")
     for pg in range(1, d.npages + 1):
         pls = sorted(d.page_lines(pg), key=lambda l: (l.y, l.x))
         for ln in pls:
@@ -173,18 +184,22 @@ def employer_of(d):
             if "Name des Arbeitgebers" in t:
                 after = t.split("Name des Arbeitgebers", 1)[1].strip(" |:")
                 if len(after) > 3:
-                    return after[:60]
-                right = [o for o in pls if abs(o.y - ln.y) <= 12 and o.x > ln.x + 40 and len(o.text.strip()) > 3]
-                if right:
-                    return sorted(right, key=lambda o: o.x)[0].text.strip()[:60]
-            if "Anschrift und Steuernummer des Arbeitgebers" in t or re.search(r"Anschrift.*Arbeitgebers", t):
-                below = [o for o in pls if ln.y < o.y <= ln.y + 90 and abs(o.x - ln.x) < 250 and len(o.text.strip()) > 3]
+                    return _clean_emp(after)
+            if re.search(r"Anschrift.*Arbeitgebers|Arbeitgeber\s*/\s*Lohnsteuer", t):
+                below = [o for o in pls if ln.y < o.y <= ln.y + 130 and abs(o.x - ln.x) < 260]
                 for o in sorted(below, key=lambda o: o.y):
                     cand = o.text.strip()
-                    if not re.match(r"^\d", cand) and "Steuernummer" not in cand:
-                        return cand[:60]
+                    if len(cand) >= 3 and not re.match(r"^\d", cand) \
+                       and not any(cand.lower().startswith(w) for w in LAB):
+                        return _clean_emp(cand)
+    # c) Kopf-Adressblock: erste Zeile im oberen Bereich mit Namen-vor-Trenner
+    for ln in sorted(d.page_lines(1), key=lambda l: (l.y, l.x)):
+        if ln.y < 480:
+            m = RE_ADDR.match(ln.text.strip())
+            if m and not any(m.group(1).lower().startswith(w) for w in LAB):
+                return _clean_emp(m.group(1))
     m = RE_FIRM.search(d.text)
-    return m.group(1)[:60] if m else None
+    return _clean_emp(m.group(1)) if m else None
 
 
 def positional_pairing(d, vals):

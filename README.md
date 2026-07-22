@@ -57,7 +57,7 @@ npm run eval   -- /tmp/claims-container examples/goldset-lstb.jsonl   # recall@1
 Jeder Claim traegt eCode, Wert, Quelle, Seite, y und Zeugenzahl. `gitchain-eval.py` trennt
 Fails in "kein Claim" (Extraktionsluecke) vs "Rank>3" (Retrieval) — so wird jeder Fehlschlag
 ein adressierbares Ticket statt eines Gefuehls. Referenzlauf (54 GT-Fragen, BM25-only,
-Single-Witness, text-layer only, KEIN Paddle): Orakel 89%, recall@3 68%.
+Single-Witness, text-layer only, KEIN Paddle, dense+RRF): Orakel 89%, recall@1 78%, recall@3 83%.
 
 Rerank (Level 5): Request-Body `"rerank": true` laesst das CHAT_URL-Modell die Top-20 neu
 ordnen (8s-Timeout, Fallback = Fusionsreihenfolge). Prefix (Level 4): `"prefix":"auto"` in

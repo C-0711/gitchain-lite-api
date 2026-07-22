@@ -67,6 +67,9 @@ def embed(url, model, batch):
 def main():
     argv = [a for a in sys.argv[1:]]
     embed_url = None
+    model_override = None
+    if "--model" in argv:
+        j = argv.index("--model"); model_override = argv[j+1]; del argv[j:j+2]
     if "--embed-url" in argv:
         j = argv.index("--embed-url")
         embed_url = argv[j + 1]
@@ -88,7 +91,7 @@ def main():
     bm = BM25([c["text"] for c in chunks])
     S = None
     if embed_url:
-        model = idx.get("model") or "embedding-model"
+        model = model_override or idx.get("model") or "embedding-model"
         try:
             C = embed(embed_url, model, [c["text"] for c in chunks])
             Q = embed(embed_url, model, [g["q"] for g in gold])
