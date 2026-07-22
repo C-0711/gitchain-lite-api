@@ -13,6 +13,8 @@ jobs:
         with: { python-version: "3.11" }
       - name: "Compile toolkit and training py"
         run: python -m py_compile toolkit/*.py training/*.py
+      - name: "Install eval dep (numpy)"
+        run: pip install numpy
       - name: "doctor (core prerequisites)"
         run: node gitchain-lite.mjs --doctor
       - name: "demo (model-free build, push, cited query)"
