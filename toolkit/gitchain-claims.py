@@ -88,8 +88,61 @@ def read_doc(path):
     return Doc(os.path.basename(path), lines, len(pdf))
 
 
+_KW = [("E0200204", ("rutto",), ()), ("E0200304", ("ohnsteuer",), ("und10", "9und")),
+       ("E0200404", ("olidar",), ("und10", "9und")),
+       ("E0200504", ("irchensteuer",), ("hegatt", "ebenspartner"))]
+
+def glyph_vals(path):
+    """Zweiter, MODELL-FREIER Zeuge (kein Paddle/OCR): derselbe Text-Layer, aber ueber
+    glyph_pdf (Zeichen-Boxen -> detect_table) rekonstruiert. Paarung ZEILEN-LOKAL in der
+    Tabellenzeile (Label-Zelle + Geldzelle) — unabhaengige Geometrie bestaetigt Werte.
+    Rueckgabe {code: raw} oder {} wenn glyph_pdf/Tabellenbau nicht verfuegbar."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import glyph_pdf
+    except Exception:
+        return {}
+    pdf = fitz.open(path)
+    if not "".join(p.get_text() for p in pdf).strip():
+        return {}
+    vals = {}   # {code: (raw, page, y)} — gleiche Form wie extract_vals
+    compact = lambda t: re.sub(r"\s+", "", t.lower())
+    for pno, page in enumerate(pdf, 1):
+        try:
+            g, recs = glyph_pdf.from_pdf(page)
+            H, W = g.shape
+            rows = glyph_pdf.detect_table(recs, W, H).get("rows", [])
+        except Exception:
+            continue
+        for row in rows:
+            cells = [RE_FIX.sub(r"\1,\2", c) for c in row.get("cells", []) if c]
+            monies = [c.strip() for c in cells if RE_MONEYTOK.fullmatch(c.strip())]
+            if not monies:
+                continue
+            money = monies[0]; y = int(row.get("y", 0))
+            for c in cells:
+                m = RE_ROW.match(c)
+                if m and m.group(1) in ROW2CODE and ROW2CODE[m.group(1)] not in vals:
+                    vals[ROW2CODE[m.group(1)]] = (money, pno, y)
+                    break
+            for code, kws, excl in _KW:
+                if code in vals:
+                    continue
+                cc = compact(" ".join(cells))
+                if all(k in cc for k in kws) and not any(x in cc for x in excl):
+                    vals[code] = (money, pno, y)
+    return vals
+
+
+RE_SEMI = re.compile(r"(\d);(\d{2})\b")        # Dezimal-";" statt "," (13585;13)
+RE_PIPE = re.compile(r"(\d)\s*\|\s*(\d{2})\b")  # Euro|Cent durch Tabellenstrich getrennt (37315 | 69)
+RE_EURSYM = re.compile(r"\s*(?:€|EUR)\b")       # nachlaufendes Waehrungssymbol (43.296,32 €)
+
 def repair(d):
     for l in d.lines:
+        l.text = RE_EURSYM.sub("", l.text)
+        l.text = RE_SEMI.sub(r"\1,\2", l.text)
+        l.text = RE_PIPE.sub(r"\1,\2", l.text)
         l.text = RE_FIX.sub(r"\1,\2", l.text)
         l.text = RE_FIXSP.sub(r"\1,\2", l.text)
         m = RE_CENTSEG.match(l.text.strip())
@@ -252,6 +305,8 @@ def main():
     ap = argparse.ArgumentParser(description="Typed-Claims-Container aus Text-Layer-PDFs (LStB)")
     ap.add_argument("pdfDir"); ap.add_argument("outDir")
     ap.add_argument("--profile", default="lstb", choices=["lstb"])
+    ap.add_argument("--witness", default="none", choices=["none", "glyph"],
+                    help="'glyph' fuegt den modell-freien glyph_pdf-Bestaetigungszeugen hinzu (langsamer)")
     args = ap.parse_args()
     cdir = os.path.abspath(args.outDir)
     os.makedirs(f"{cdir}/docs", exist_ok=True)
@@ -268,7 +323,13 @@ def main():
             continue
         repair(d)
         emp = employer_of(d)
-        merged = merge_witnesses([("glyph-textlayer", extract_vals(d))])
+        # Primaerzeuge: rawdict-Spans. --witness glyph fuegt den glyph_pdf-Tabellenzeugen
+        # als BESTAETIGUNG hinzu (kein Paddle/OCR). Hinweis: derselbe Text-Layer -> erhoeht
+        # die Zeugenzahl (Vertrauen), NICHT die Abdeckung; Recall-Hebel ist die Extraktion.
+        wl = [("glyph-textlayer", extract_vals(d))]
+        if args.witness == "glyph":
+            wl.append(("glyph-table", glyph_vals(path)))
+        merged = merge_witnesses(wl)
         shutil.copy2(path, f"{cdir}/docs/{d.file}")
         my = RE_YEAR.search(d.text)
         year = my.group(1) if my else "2024"
