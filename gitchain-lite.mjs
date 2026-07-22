@@ -298,6 +298,25 @@ async function chatAnswer(q, matches) {
   const j = await r.json();
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
+// Opt-in Rerank (Request-Body "rerank": true): das Chat-Modell waehlt aus den Top-20 der fusionierten
+// Rangliste die 3 besten Kandidaten; NUR JSON {"best":[i,i,i]} als Antwort. Defensiv: harter 8s-Timeout,
+// Regex-Parse (nur Ziffern), bei JEDEM Fehler (Timeout/HTTP/Parse) -> null und die Fusion bleibt wie sie ist.
+async function rerankPick(q, cands) {
+  const list = cands.map((c, i) => `[${i}]${c.source ? ` (${c.source})` : ""} ${String(c.text || "").slice(0, 240)}`).join("\n");
+  const prompt = `Candidates:\n${list}\n\nQuery: ${q}\n\nAnswer ONLY with JSON {"best":[i1,i2,i3]} — the 3 candidate indices that best answer the query.`;
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(CHAT_URL, { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "local", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 40 }) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const txt = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
+    const m = txt.match(/"best"\s*:\s*\[([^\]]*)\]/) || txt.match(/\[([\d,\s]+)\]/);
+    const picks = [...new Set(((m ? m[1] : "").match(/\d+/g) || []).map(Number))].filter((n) => n < cands.length).slice(0, 3);
+    return picks.length ? picks : null;
+  } catch { return null; } finally { clearTimeout(t); }
+}
+
 // Load a container's vectors as fp32 (L2-normalized, chunk order). Prefers the raw .brain/vectors.f32
 // blob; if the container is a TurboQuant store (only vectors_tq.npz), decode-on-open via numpy
 // tq_decode and cache the fp32 by HEAD sha (so a container quantized at rest is still queryable).
@@ -409,8 +428,17 @@ async function queryContainer(b) {
     } catch (e) { console.error("dense path unavailable, lexical only:", String((e && e.message) || e)); }
   }
   const lexRanks = bm25Ranks(bmIndex(repo, sha, texts), q, 100);
-  const ranked = denseRanks ? rrfFuse([denseRanks, lexRanks]) : lexRanks;
-  const mode = denseRanks ? "dense+bm25 (rrf)" : "bm25 (kein EMBED_URL noetig)";
+  let ranked = denseRanks ? rrfFuse([denseRanks, lexRanks]) : lexRanks;
+  let mode = denseRanks ? "dense+bm25 (rrf)" : "bm25 (kein EMBED_URL noetig)";
+  if (b.rerank && CHAT_URL) {
+    const top = ranked.slice(0, 20);
+    const picks = await rerankPick(q, top.map((r) => { const c = chunks[order[r]] || {}; return { source: c.source, text: c.text }; }));
+    if (picks) { // gewaehlte zuerst, Rest in Fusionsreihenfolge; bei null bleibt die Fusion unveraendert
+      const chosen = picks.map((i) => top[i]);
+      ranked = [...chosen, ...ranked.filter((r) => !chosen.includes(r))];
+      mode += "+rerank";
+    }
+  }
   const matches = ranked.slice(0, k).map((r) => {
     const id = order[r], c = chunks[id] || {};
     const m = { score: +((scores.get(r) ?? 0)).toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) };
@@ -419,6 +447,7 @@ async function queryContainer(b) {
     return m;
   });
   const out = { container: segs.join("/"), q, count: order.length, mode, matches };
+  if (b.rerank && !CHAT_URL) out.hint = "CHAT_URL setzen (OpenAI-kompatible /v1/chat/completions) fuer Rerank — Treffer kommen auch ohne";
   if (b.answer && CHAT_URL) { try { out.answer = await chatAnswer(q, matches); } catch (e) { out.answer_error = String((e && e.message) || e); } }
   else if (b.answer) out.answer_hint = "CHAT_URL setzen (OpenAI-kompatible /v1/chat/completions) fuer lokale Antworten — Treffer kommen auch ohne";
   return out;

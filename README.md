@@ -44,6 +44,28 @@ Faehigkeit ist ein opt-in — das System degradiert sanft statt zu brechen:
 Konfiguration: `cp .env.example .env`, anpassen, exportieren — oder Variablen direkt setzen.
 `npm run doctor` sagt dir jederzeit, welche Stufe aktiv ist.
 
+### Claims statt Prosa (Formulardokumente) + messen
+
+Fuer Formulare (z.B. Lohnsteuerbescheinigungen) sind **typisierte Claims** die besseren Atome
+als Prosa-Fenster — gemessen ~3x recall@1 gegenueber dem besten Prosa-Stack:
+
+```bash
+npm run claims -- meine-pdfs/ /tmp/claims-container      # deterministische Extraktion (LStB-Profil)
+npm run eval   -- /tmp/claims-container examples/goldset-lstb.jsonl   # recall@1/@3 + diagnostizierte Fails
+```
+
+Jeder Claim traegt eCode, Wert, Quelle, Seite, y und Zeugenzahl. `gitchain-eval.py` trennt
+Fails in "kein Claim" (Extraktionsluecke) vs "Rank>3" (Retrieval) — so wird jeder Fehlschlag
+ein adressierbares Ticket statt eines Gefuehls. Referenzlauf (54 GT-Fragen, BM25-only,
+Single-Witness): Orakel 72%, recall@3 56%.
+
+Rerank (Level 5): Request-Body `"rerank": true` laesst das CHAT_URL-Modell die Top-20 neu
+ordnen (8s-Timeout, Fallback = Fusionsreihenfolge). Prefix (Level 4): `"prefix":"auto"` in
+ingest.json stellt jeden Atom-Text den erkannten Dokument-Kopf voran (Firmenname).
+
+Quantisierte Container tragen ihre GEMESSENE Karte in `.brain/tq_report.json`
+(TurboQuant/PolarQuant, arXiv 2504.19874): Kompression, Cosinus-Treue, Score-Recall@10.
+
 ### Eigene Inhalte — zwei Wege
 
 **Ohne Modelle** (Texte/Markdown): Container-Worktree bauen und pushen — sofort suchbar:

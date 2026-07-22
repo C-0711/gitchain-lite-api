@@ -9,6 +9,8 @@
     "start": "node gitchain-lite.mjs",
     "doctor": "node gitchain-lite.mjs --doctor",
     "demo": "./demo.sh",
+    "claims": "python3 toolkit/gitchain-claims.py",
+    "eval": "python3 toolkit/gitchain-eval.py",
     "up": "./gitchain-up.sh",
     "mcp": "node gitchain-mcp.mjs",
     "proxy": "node gitchain-rag-proxy.mjs"

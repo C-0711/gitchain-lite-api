@@ -160,6 +160,7 @@ async function runChain(barePath, { dryRun = false, log = async () => {} } = {})
         "--embed-url", EMBED_URL || "http://EMBED_URL/v1/embeddings",
         "--model", cfg.model || "embedding-model", "--dims", String(cfg.dims || 768), "--no-commit"];
       if (READ_URL) b.push("--read-url", READ_URL);
+      if (cfg.prefix) b.push("--prefix", String(cfg.prefix)); // "auto" = Doc-Header je PDF (Level 4)
       cmds.push(["build", b]);
       if (willQuantize) {
         cmds.push(["quantize", ["gitchain-quantize.py", worktree,

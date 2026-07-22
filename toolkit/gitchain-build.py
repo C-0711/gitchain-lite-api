@@ -27,7 +27,7 @@ Usage:
       --embed-url http://localhost:8080/v1/embeddings [--read-url URL] \
       [--model NAME] [--dims 768] [--chunk-len 900] [--id container:my-brain] [--no-commit]
 """
-import argparse, base64, glob, hashlib, json, os, subprocess, sys, time, urllib.request
+import argparse, base64, glob, hashlib, json, os, re, subprocess, sys, time, urllib.request
 from multiprocessing import Pool
 import numpy as np
 
@@ -38,6 +38,22 @@ except Exception:
     _GLYPH = None
 
 ARGS = None  # filled in main(); read by worker via module global (Pool fork)
+
+# --prefix auto: firm-name pattern (GmbH / GmbH & Co. KG / OHG / AG / KG / UG / e.V. / BV / SE)
+_FIRM_RE = re.compile(r"([A-ZÄÖÜ][\w.&ÄÖÜäöüß-]*(?:\s+[A-ZÄÖÜ&][\w.&ÄÖÜäöüß-]*){0,5}"
+                      r"\s+(?:GmbH(?:\s*&\s*Co\.?\s*KG)?|OHG|AG|KG|UG|e\.V\.|BV|SE))")
+
+
+def detect_header(path):
+    """--prefix auto: document header from page 1 — firm-name regex, else first text line >8 chars."""
+    try:
+        text = _GLYPH.fitz.open(path)[0].get_text()
+    except Exception:
+        return ""
+    m = _FIRM_RE.search(text)
+    if m:
+        return " ".join(m.group(1).split())  # collapse line-wrapped names
+    return next((l.strip() for l in text.splitlines() if len(l.strip()) > 8), "")
 
 
 def read_blocks(path):
@@ -70,7 +86,8 @@ def chunk_doc(path):
     # reconstructs each spec row into its own clean chunk. Scans (no text-layer) fall through.
     if _GLYPH is not None and not ARGS.read_url and path.lower().endswith(".pdf"):
         try:
-            _snr, scan, gchunks = _GLYPH.read_pdf_chunks(path)
+            pfx = detect_header(path) if ARGS.prefix == "auto" else ARGS.prefix
+            _snr, scan, gchunks = _GLYPH.read_pdf_chunks(path, prefix=pfx)
             if not scan and gchunks:
                 out = []
                 for t in gchunks:
@@ -133,6 +150,7 @@ def main():
     ap.add_argument("--model", default="embedding-model", help="embedding model name to send")
     ap.add_argument("--dims", type=int, default=768)
     ap.add_argument("--chunk-len", type=int, default=900)
+    ap.add_argument("--prefix", default="", help="chunk prefix; 'auto' = detect document header per PDF")
     ap.add_argument("--glob", default="**/*.pdf", help="source glob relative to --source")
     ap.add_argument("--id", default="", help="container id for the manifest")
     ap.add_argument("--title", default="", help="human title for the manifest")
