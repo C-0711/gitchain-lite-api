@@ -90,6 +90,9 @@ def main():
     import tq_decode
     R = tq_decode.load_tq(tq_path)
     recall = score_recall(V, R)
+    Rn = R.astype(np.float32)
+    Rn /= (np.linalg.norm(Rn, axis=1, keepdims=True) + 1e-9)
+    cos_fid = float(np.mean(np.sum(V * Rn, axis=1)))   # mittlere Cosinus-Treue Original vs. dequantisiert
 
     # --- container metadata ---
     idx_path = os.path.join(cdir, ".brain", "index.json")
@@ -103,12 +106,22 @@ def main():
         open(ga, "a").write(line)
 
     ratio = fp32_bytes / sz
-    print(f"  → {sz/1e6:.2f} MB  ({ratio:.1f}× smaller)  ·  ScoreRecall@10 {recall:.4f}", flush=True)
+    # --- Quantum-Karte: die GEMESSENEN Kennzahlen reisen im Container mit (.brain/tq_report.json),
+    #     damit Server/UI sie je Container zeigen koennen — wie die Live-Demo-Karten (Haar-Rotation
+    #     + Lloyd-Max, arXiv 2504.19874): Kompression, Cosinus-Treue, Score-Recall@10. ---
+    card = {"algo": "TurboQuant/PolarQuant (Haar + Lloyd-Max)", "arxiv": "2504.19874",
+            "level": args.level, "bits_per_coord": b, "vectors": n, "dims": d,
+            "fp32_mb": round(fp32_bytes / 1e6, 2), "tq_mb": round(sz / 1e6, 2),
+            "compression": round(ratio, 1), "cos_fidelity": round(cos_fid, 4),
+            "score_recall_at_10": round(recall, 4), "encoder": enc_kind,
+            "encode_s": round(t_enc, 2), "decode": "serve/tq_decode.py (numpy, self-contained)"}
+    json.dump(card, open(os.path.join(cdir, ".brain", "tq_report.json"), "w"), indent=1)
+    print(f"  → {sz/1e6:.2f} MB  ({ratio:.1f}× smaller)  ·  CosFidelity {cos_fid:.4f}  ·  ScoreRecall@10 {recall:.4f}", flush=True)
     print(f"  → shipped serve/tq_decode.py — container decodes with numpy only (encode {t_enc:.1f}s)", flush=True)
 
     if not args.no_commit and os.path.isdir(os.path.join(cdir, ".git")):
-        subprocess.run(["git", "-C", cdir, "add", ".brain/vectors_tq.npz", "serve/tq_decode.py",
-                        ".brain/index.json", ".gitattributes"], check=True)
+        subprocess.run(["git", "-C", cdir, "add", ".brain/vectors_tq.npz", ".brain/tq_report.json",
+                        "serve/tq_decode.py", ".brain/index.json", ".gitattributes"], check=True)
         msg = (f"quant: TurboQuant {args.level} — {fp32_bytes/1e6:.1f}MB → {sz/1e6:.2f}MB "
                f"({ratio:.1f}×), ScoreRecall@10 {recall:.4f}; self-decoding (serve/tq_decode.py)")
         subprocess.run(["git", "-C", cdir, "-c", "user.name=gitchain-turbo",

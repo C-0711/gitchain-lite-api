@@ -290,7 +290,7 @@ async function embedOne(text, model) {
   return (await r.json()).data[0].embedding;
 }
 async function chatAnswer(q, matches) {
-  const ctx = matches.map((m, i) => `[${i + 1}] ${m.text}`).join("\n\n");
+  const ctx = matches.map((m, i) => `[${i + 1}]${m.source ? ` (Quelle: ${m.source})` : ""} ${m.text}`).join("\n\n"); // Quelle mitgeben: sonst kann das Modell gleichartige Dokumente nicht auseinanderhalten
   const prompt = `Use ONLY the context to answer; cite sources as [n]. If it isn't in the context, say so.\n\nContext:\n${ctx}\n\nQuestion: ${q}`;
   const r = await fetch(CHAT_URL, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "local", messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: 512 }) });
@@ -298,10 +298,35 @@ async function chatAnswer(q, matches) {
   const j = await r.json();
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
+// Opt-in Rerank (Request-Body "rerank": true): das Chat-Modell waehlt aus den Top-20 der fusionierten
+// Rangliste die 3 besten Kandidaten; NUR JSON {"best":[i,i,i]} als Antwort. Defensiv: harter 8s-Timeout,
+// Regex-Parse (nur Ziffern), bei JEDEM Fehler (Timeout/HTTP/Parse) -> null und die Fusion bleibt wie sie ist.
+async function rerankPick(q, cands) {
+  const list = cands.map((c, i) => `[${i}]${c.source ? ` (${c.source})` : ""} ${String(c.text || "").slice(0, 240)}`).join("\n");
+  const prompt = `Candidates:\n${list}\n\nQuery: ${q}\n\nAnswer ONLY with JSON {"best":[i1,i2,i3]} — the 3 candidate indices that best answer the query.`;
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const r = await fetch(CHAT_URL, { method: "POST", signal: ctrl.signal, headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "local", messages: [{ role: "user", content: prompt }], temperature: 0, max_tokens: 40 }) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const txt = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
+    const m = txt.match(/"best"\s*:\s*\[([^\]]*)\]/) || txt.match(/\[([\d,\s]+)\]/);
+    const picks = [...new Set(((m ? m[1] : "").match(/\d+/g) || []).map(Number))].filter((n) => n < cands.length).slice(0, 3);
+    return picks.length ? picks : null;
+  } catch { return null; } finally { clearTimeout(t); }
+}
+
 // Load a container's vectors as fp32 (L2-normalized, chunk order). Prefers the raw .brain/vectors.f32
 // blob; if the container is a TurboQuant store (only vectors_tq.npz), decode-on-open via numpy
 // tq_decode and cache the fp32 by HEAD sha (so a container quantized at rest is still queryable).
-const _vecCache = new Map(); // `${repo}|${sha}` -> Float32Array
+const _vecCache = new Map(); // `${repo}|${sha}` -> Float32Array  (pro Repo nur der aktuelle HEAD; max 8 Container resident)
+const VEC_CACHE_MAX = Number(process.env.VEC_CACHE_MAX || 8);
+function vecCachePut(repo, key, vecs) {
+  for (const k of _vecCache.keys()) if (k.startsWith(repo + "|") && k !== key) _vecCache.delete(k); // alter HEAD desselben Repos
+  _vecCache.set(key, vecs);
+  while (_vecCache.size > VEC_CACHE_MAX) _vecCache.delete(_vecCache.keys().next().value); // LRU: ältester Eintrag
+}
 const catBlob = (repo, path) =>
   execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `HEAD:${path}`], { maxBuffer: 512 << 20 });
 const blobExists = (repo, path) => {
@@ -317,17 +342,59 @@ function loadContainerVectors(repo, index) {
   const sha = git(repo, ["rev-parse", "HEAD"]).trim();
   const key = `${repo}|${sha}`;
   const hit = _vecCache.get(key);
-  if (hit) return hit;
+  if (hit) { _vecCache.delete(key); _vecCache.set(key, hit); return hit; } // LRU-Touch
   const cacheDir = join(REPO_BASE, ".cache"); mkdirSync(cacheDir, { recursive: true });
   const npz = join(cacheDir, `${sha.slice(0, 16)}.npz`);
   writeFileSync(npz, catBlob(repo, ".brain/vectors_tq.npz"));
   let vecs;
   try { vecs = asF32(execFileSync(PYTHON_BIN, [join(TOOLKIT_DIR, "tq_decode.py"), "--raw", npz], { maxBuffer: 512 << 20 })); }
   finally { try { unlinkSync(npz); } catch {} }
-  _vecCache.set(key, vecs);
+  vecCachePut(repo, key, vecs);
   console.log(`  decode-on-open: ${store} → ${vecs.length} floats  (${repo.split("/").slice(-3).join("/")})`);
   return vecs;
 }
+
+// ---- BM25 lexical twin (zero-dep): search works with NO models configured; when EMBED_URL
+// is set, dense and lexical ranks are fused (reciprocal-rank fusion). Exact terms (names,
+// IDs, amounts) are lexical strengths a small embedder misses — fusion beats either alone.
+const _bmCache = new Map(); // `${repo}|${sha}` -> {tf, len, df, avg, N}
+const BM_CACHE_MAX = Number(process.env.VEC_CACHE_MAX || 8);
+const _tok = (s) => String(s).toLowerCase().replace(/ß/g, "ss").match(/[a-zà-ÿä-ü]{2,}|\d+/g) || [];
+function bmIndex(repo, sha, texts) {
+  const key = `${repo}|${sha}`;
+  const hit = _bmCache.get(key);
+  if (hit) { _bmCache.delete(key); _bmCache.set(key, hit); return hit; }
+  const tf = [], len = [], df = new Map();
+  for (const t of texts) {
+    const m = new Map();
+    const ws = _tok(t);
+    for (const w of ws) m.set(w, (m.get(w) || 0) + 1);
+    for (const w of m.keys()) df.set(w, (df.get(w) || 0) + 1);
+    tf.push(m); len.push(ws.length);
+  }
+  const idx = { tf, len, df, avg: len.reduce((a, b) => a + b, 0) / Math.max(1, len.length), N: texts.length };
+  for (const k of _bmCache.keys()) if (k.startsWith(repo + "|") && k !== key) _bmCache.delete(k);
+  _bmCache.set(key, idx);
+  while (_bmCache.size > BM_CACHE_MAX) _bmCache.delete(_bmCache.keys().next().value);
+  return idx;
+}
+function bm25Ranks(idx, q, topn) {
+  const s = new Float32Array(idx.N);
+  for (const w of new Set(_tok(q))) {
+    const df = idx.df.get(w); if (!df) continue;
+    const idf = Math.log(1 + (idx.N - df + 0.5) / (df + 0.5));
+    for (let i = 0; i < idx.N; i++) {
+      const f = idx.tf[i].get(w);
+      if (f) s[i] += idf * f * 2.5 / (f + 1.5 * (0.25 + 0.75 * idx.len[i] / idx.avg));
+    }
+  }
+  return [...s.keys()].filter((i) => s[i] > 0).sort((a, b) => s[b] - s[a]).slice(0, topn);
+}
+const rrfFuse = (lists, k = 60) => {
+  const s = new Map();
+  for (const l of lists) l.forEach((i, r) => s.set(i, (s.get(i) || 0) + 1 / (k + r + 1)));
+  return [...s.keys()].sort((a, b) => s.get(b) - s.get(a));
+};
 
 // Semantic search over ONE container's own .brain vectors (fp32, or TurboQuant decode-on-open). No index DB.
 async function queryContainer(b) {
@@ -335,23 +402,54 @@ async function queryContainer(b) {
   const container = String(b.container || "").trim();
   const segs = container.startsWith("0711:") ? container.slice(5).split(":") : parseSegs(container);
   const repo = resolveRepo(segs, false);
-  if (!repo) return { error: "container not found" };
-  if (!EMBED_URL) return { error: "EMBED_URL not configured (local embeddings)" };
+  if (!repo) return { error: "container not found", hint: "GET /git/repos listet alle Container; Pfad = tenant/projekt/id" };
   let index; try { index = JSON.parse(git(repo, ["show", "HEAD:.brain/index.json"])); }
-  catch { return { error: "container not built yet (no .brain/index.json)" }; }
+  catch { return { error: "container not built yet (no .brain/index.json)", hint: "push docs/ + .gitchain/ingest.json (mode:build) — oder data/chunks.jsonl + .brain/index.json direkt committen (BM25 braucht keine Vektoren)" }; }
   const order = index.order || [], dims = index.dims || 768, chunks = {};
   try { for (const l of git(repo, ["show", "HEAD:data/chunks.jsonl"]).split("\n")) if (l.trim()) { const c = JSON.parse(l); chunks[c.id] = c; } } catch {}
-  const vecs = loadContainerVectors(repo, index);
-  const n = Math.min(order.length, Math.floor(vecs.length / dims));
-  const qv = await embedOne(q, index.model);
-  let qn = 0; for (let i = 0; i < dims; i++) qn += qv[i] * qv[i]; qn = Math.sqrt(qn) || 1;
+  const sha = git(repo, ["rev-parse", "HEAD"]).trim();
+  const texts = order.map((id) => (chunks[id] && chunks[id].text) || "");
   const k = Math.min(Math.max(1, Number(b.k) || 8), 30);
-  const scored = [];
-  for (let r = 0; r < n; r++) { let dot = 0; const off = r * dims; for (let i = 0; i < dims; i++) dot += qv[i] * vecs[off + i]; scored.push([r, dot / qn]); }
-  scored.sort((a, b) => b[1] - a[1]);
-  const matches = scored.slice(0, k).map(([r, s]) => { const id = order[r], c = chunks[id] || {}; return { score: +s.toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) }; });
-  const out = { container: segs.join("/"), q, count: n, matches };
+  const scores = new Map();                    // idx -> dense cosine (nur fürs Anzeigen)
+  let denseRanks = null;
+  if (EMBED_URL) {
+    try {
+      const vecs = loadContainerVectors(repo, index);
+      const n = Math.min(order.length, Math.floor(vecs.length / dims));
+      if (n > 0) {
+        const qv = await embedOne(q, index.model);
+        let qn = 0; for (let i = 0; i < dims; i++) qn += qv[i] * qv[i]; qn = Math.sqrt(qn) || 1;
+        const scored = [];
+        for (let r = 0; r < n; r++) { let dot = 0; const off = r * dims; for (let i = 0; i < dims; i++) dot += qv[i] * vecs[off + i]; scored.push([r, dot / qn]); }
+        scored.sort((a, b) => b[1] - a[1]);
+        for (const [r, s] of scored) scores.set(r, s);
+        denseRanks = scored.map(([r]) => r).slice(0, 100);
+      }
+    } catch (e) { console.error("dense path unavailable, lexical only:", String((e && e.message) || e)); }
+  }
+  const lexRanks = bm25Ranks(bmIndex(repo, sha, texts), q, 100);
+  let ranked = denseRanks ? rrfFuse([denseRanks, lexRanks]) : lexRanks;
+  let mode = denseRanks ? "dense+bm25 (rrf)" : "bm25 (kein EMBED_URL noetig)";
+  if (b.rerank && CHAT_URL) {
+    const top = ranked.slice(0, 20);
+    const picks = await rerankPick(q, top.map((r) => { const c = chunks[order[r]] || {}; return { source: c.source, text: c.text }; }));
+    if (picks) { // gewaehlte zuerst, Rest in Fusionsreihenfolge; bei null bleibt die Fusion unveraendert
+      const chosen = picks.map((i) => top[i]);
+      ranked = [...chosen, ...ranked.filter((r) => !chosen.includes(r))];
+      mode += "+rerank";
+    }
+  }
+  const matches = ranked.slice(0, k).map((r) => {
+    const id = order[r], c = chunks[id] || {};
+    const m = { score: +((scores.get(r) ?? 0)).toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) };
+    // Provenienz durchreichen: Seite/Position/Leser, wenn der Builder sie mitgab (Glyph: page+y)
+    for (const f of ["page", "y", "line_from", "line_to", "reader"]) if (c[f] !== undefined) m[f] = c[f];
+    return m;
+  });
+  const out = { container: segs.join("/"), q, count: order.length, mode, matches };
+  if (b.rerank && !CHAT_URL) out.hint = "CHAT_URL setzen (OpenAI-kompatible /v1/chat/completions) fuer Rerank — Treffer kommen auch ohne";
   if (b.answer && CHAT_URL) { try { out.answer = await chatAnswer(q, matches); } catch (e) { out.answer_error = String((e && e.message) || e); } }
+  else if (b.answer) out.answer_hint = "CHAT_URL setzen (OpenAI-kompatible /v1/chat/completions) fuer lokale Antworten — Treffer kommen auch ohne";
   return out;
 }
 
@@ -362,6 +460,44 @@ function readJson(req) {
     req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch { reject(400); } });
     req.on("error", reject);
   });
+}
+
+// ---- --doctor: Setup-Selbsttest (npm run doctor) --------------------------------------
+async function doctor() {
+  const rows = [];
+  const add = (ok, what, hint) => rows.push([ok, what, hint]);
+  add(Number(process.versions.node.split(".")[0]) >= 18, `Node ${process.versions.node}`, "Node >= 18 installieren (nodejs.org)");
+  try { add(true, execFileSync("git", ["--version"], { encoding: "utf8" }).trim(), ""); }
+  catch { add(false, "git", "git installieren — Kernvoraussetzung"); }
+  try { mkdirSync(REPO_BASE, { recursive: true }); writeFileSync(join(REPO_BASE, ".doctor"), "ok"); unlinkSync(join(REPO_BASE, ".doctor"));
+    add(true, `REPO_BASE beschreibbar (${REPO_BASE}, ${listRepos().length} Container)`, ""); }
+  catch { add(false, `REPO_BASE ${REPO_BASE}`, "Pfad anlegen/Rechte pruefen oder REPO_BASE_PATH setzen"); }
+  const probe = async (url, what, optionalHint) => {
+    if (!url) { add(null, `${what}: nicht gesetzt`, optionalHint); return; }
+    try { const c = new AbortController(); const t = setTimeout(() => c.abort(), 3000);
+      const r = await fetch(url, { method: "POST", signal: c.signal, headers: { "Content-Type": "application/json" }, body: "{}" });
+      clearTimeout(t); add(r.status < 500 || r.status === 500, `${what}: erreichbar (${url})`, ""); }
+    catch { add(false, `${what}: ${url} NICHT erreichbar`, "Modellserver starten oder Variable leeren (BM25 laeuft ohne)"); }
+  };
+  await probe(EMBED_URL, "EMBED_URL (dense Suche)", "optional — Suche laeuft lexikalisch (BM25) auch ohne");
+  await probe(CHAT_URL, "CHAT_URL (Antworten)", "optional — /api/v1/query liefert auch ohne Antworttext Treffer");
+  try { execFileSync(PYTHON_BIN, ["-c", "import numpy, fitz"], { stdio: "ignore" });
+    add(true, `${PYTHON_BIN} + numpy + pymupdf (Ingest-Reader)`, ""); }
+  catch { add(null, `${PYTHON_BIN}: numpy/pymupdf fehlen`, "optional — nur fuer PDF-Ingest: pip3 install numpy pymupdf"); }
+  add(existsSync(join(TOOLKIT_DIR, "tq_decode.py")), `Toolkit (${TOOLKIT_DIR})`, "TOOLKIT_DIR pruefen — noetig fuer TurboQuant-Container");
+  let core = true;
+  console.log("\n  gitchain-lite doctor\n");
+  for (const [ok, what, hint] of rows) {
+    const mark = ok === true ? "\x1b[32m✓\x1b[0m" : ok === false ? "\x1b[31m✗\x1b[0m" : "\x1b[33m○\x1b[0m";
+    console.log(`  ${mark} ${what}${hint && ok !== true ? `\n      → ${hint}` : ""}`);
+    if (ok === false && !what.includes("EMBED") && !what.includes("CHAT") && !what.includes("numpy")) core = false;
+  }
+  console.log(core ? "\n  Kern OK — Server starten mit: npm start  (Demo: npm run demo)\n"
+                   : "\n  Kernvoraussetzungen fehlen (s.o.) — erst beheben, dann npm start.\n");
+  return core;
+}
+if (process.argv.includes("--doctor")) {
+  process.exit((await doctor()) ? 0 : 1);
 }
 
 // ---- HTTP-Router ----------------------------------------------------------------------
@@ -449,7 +585,12 @@ createServer(async (req, res) => {
         const kind = g[2], repo = resolveRepo(parseSegs(g[1]));
         if (!repo) return send(404, { error: "repository not found" });
         const q = Object.fromEntries(u.searchParams);
-        if (kind === "raw") { const buf = execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `${q.ref || "HEAD"}:${q.path}`], { maxBuffer: 256 << 20 }); res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(buf); }
+        if (kind === "raw") {
+          const ref = q.ref || "HEAD";
+          if (!okRef(ref) || !okPath(q.path) || !q.path) throw 400; // wie blob(): kein "-"-Prefix → keine git-Option-Injection
+          const buf = execFileSync("git", ["--git-dir", repo, "cat-file", "blob", `${ref}:${q.path}`], { maxBuffer: 256 << 20 });
+          res.writeHead(200, { "Content-Type": "application/octet-stream" }); return res.end(buf);
+        }
         return send(200, obj[kind](repo, q));
       }
     }

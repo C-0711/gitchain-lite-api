@@ -4,13 +4,17 @@ Das IST Glyphs `from_pdf` (Zeichen-Boxen aus dem PDF-Text-Layer) + `detect_table
 Tabellen-Rekonstruktion). Kein Substitut-Reader: Glyph nutzt für den Text-Layer ohnehin fitz —
 dieser Code ist genau dieser Glyph-Pfad, nur importierbar (so parallelisierbar, ohne Glyph zu umgehen).
 Das MLP (`from_image`) bleibt in server.py und greift nur bei Scans/Fotos."""
+import re
 import numpy as np, fitz
 
 DPI = 200
 
 def from_pdf(page, dpi=DPI):
     sc=dpi/72.0
-    pm=page.get_pixmap(dpi=dpi);g=np.frombuffer(pm.samples,np.uint8).reshape(pm.h,pm.w,pm.n)[:,:,0];ink=(g<160).astype(np.uint8);recs=[]
+    # Ink-Schwelle 235 statt 160: Zweck des Checks ist NUR unsichtbarer Text (weiss/hint ~255).
+    # Hell-antialiaste echte Fonts liegen bei min-Grau 160-210 und wurden mit <160 zerschossen
+    # (fehlende Buchstaben/Ziffern mitten im Wort, ganze Betragszeilen weg).
+    pm=page.get_pixmap(dpi=dpi);g=np.frombuffer(pm.samples,np.uint8).reshape(pm.h,pm.w,pm.n)[:,:,0];ink=(g<235).astype(np.uint8);recs=[]
     for bi,b in enumerate(page.get_text("rawdict")["blocks"]):
         for li,l in enumerate(b.get("lines",[])):
             flat=[(c,s) for s in l.get("spans",[]) for c in s.get("chars",[]) if c["c"].strip()];wpos=0
@@ -115,11 +119,35 @@ def detect_table(glyphs, W, H):
             if x<b: return i
         return K-1
     def cell_text(seg):
-        sub=sorted(seg,key=lambda g:(round((g["y"]+g["h"]/2.0)/(0.7*mh)),g["x"])); t=""
-        for k,g in enumerate(sub):
-            # Leerzeichen an Glyphs eigenen Wortgrenzen (wpos==0) ODER an sichtbarer x-Lücke
-            if k>0 and (g.get("wpos")==0 or (g["x"]-(sub[k-1]["x"]+sub[k-1]["w"]))>0.55*mw): t+=" "
-            t+=g["label"]
+        # Sub-Ordnung entlang der PDF-EIGENEN Zeilenstruktur (block/zeile aus from_pdf) statt
+        # rein geometrisch: eng gesetzte Umbruch-Zeilen ÜBERLAPPEN vertikal (Descender), jede
+        # y-Schwelle verschränkt sie dann mitten im Wort ("B.ru utntoda 1rb0e.itslohn").
+        # Gruppen = Text-Layer-Zeilen; visuelle Ordnung: Gruppen nach y clustern, in der
+        # visuellen Zeile nach x. Glyphen OHNE zeile-Key (Scan/MLP-Pfad) fallen aufs alte
+        # y-Raster zurück — Verhalten dort unverändert.
+        groups={}
+        for g in seg:
+            z=g.get("zeile"); key=(g.get("block"),z) if z is not None else (None,round((g["y"]+g["h"]/2.0)/(0.7*mh)))
+            groups.setdefault(key,[]).append(g)
+        gl=[]
+        for gs in groups.values():
+            ys=[g["y"]+g["h"]/2.0 for g in gs]
+            gl.append({"yc":sum(ys)/len(ys),"h":float(np.median([g["h"] for g in gs])) or mh,
+                       "x0":min(g["x"] for g in gs),"gs":sorted(gs,key=lambda g:g["x"])})
+        gl.sort(key=lambda G:G["yc"])
+        vlines=[[gl[0]]]
+        for G in gl[1:]:
+            if G["yc"]-vlines[-1][-1]["yc"]>0.45*min(G["h"],vlines[-1][-1]["h"]): vlines.append([G])
+            else: vlines[-1].append(G)
+        t=""
+        for vl in vlines:
+            for G in sorted(vl,key=lambda G:G["x0"]):
+                sub=G["gs"]
+                if t: t+=" "
+                for k,g in enumerate(sub):
+                    # Leerzeichen an Glyphs eigenen Wortgrenzen (wpos==0) ODER an sichtbarer x-Lücke
+                    if k>0 and (g.get("wpos")==0 or (g["x"]-(sub[k-1]["x"]+sub[k-1]["w"]))>0.55*mw): t+=" "
+                    t+=g["label"]
         return t.strip()
     out_rows=[]
     for i in sorted(k for k in R if k>=0):
@@ -151,5 +179,18 @@ def read_pdf_chunks(path, snr=None, prefix=""):
             cells=[c for c in row.get("cells",[]) if c]
             if not cells: continue
             t=(" | ".join(cells) if len(cells)>1 else cells[0]).strip()
-            if ((" | " in t) or len(t)>=25) and t not in seen: seen.add(t); chunks.append((pre+t)[:480])
+            # Kurze Zeilen behalten, wenn sie einen Geldbetrag tragen — sonst verliert der
+            # Atomizer genau die Wert-Zeilen von Formularen (Spalte = eigene Row, z.B. "25.850,98").
+            keep=(" | " in t) or len(t)>=25 or re.search(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}",t)
+            if keep and t not in seen:
+                seen.add(t)
+                # Lange Rows FENSTERN statt kappen: dichte Formulare verschmelzen per y-Projektion
+                # zu Riesen-Rows (>3000 Zeichen) — hartes [:480] warf genau die Betragsspalten weg.
+                if len(pre+t)<=480: chunks.append(pre+t)
+                else:
+                    buf=pre
+                    for w in t.split(" "):
+                        if len(buf)+len(w)+1>480 and buf!=pre: chunks.append(buf); buf=pre+w
+                        else: buf=(buf+" "+w) if buf!=pre else pre+w
+                    if buf!=pre: chunks.append(buf)
     return snr, False, chunks
