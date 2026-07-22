@@ -307,7 +307,32 @@ def main():
     ap.add_argument("--profile", default="lstb", choices=["lstb"])
     ap.add_argument("--witness", default="none", choices=["none", "glyph"],
                     help="'glyph' fuegt den modell-freien glyph_pdf-Bestaetigungszeugen hinzu (langsamer)")
+    ap.add_argument("--catalog", nargs="?", const="__default__", default=None,
+                    help="ELSTER-Katalog (XSD-abgeleitet) fuer Enum-/Typ-Validierung; ohne Wert = toolkit/elster-catalog.json")
     args = ap.parse_args()
+
+    catalog = {}
+    if args.catalog is not None:
+        cpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "elster-catalog.json") \
+            if args.catalog == "__default__" else args.catalog
+        try:
+            catalog = json.load(open(cpath))
+            print(f"ELSTER-Katalog: {len(catalog)} eCodes ({sum(1 for v in catalog.values() if v.get('enum'))} mit Enum)", file=sys.stderr)
+        except Exception as e:
+            print(f"WARN Katalog nicht geladen ({cpath}): {e}", file=sys.stderr)
+
+    def validate(code, value):
+        """XSD-Enumerations-/Typ-Gate (offline). -> (datentyp, valid|None)."""
+        c = catalog.get(code)
+        if not c:
+            return (None, None)
+        dt = c.get("datentyp")
+        if c.get("enum"):
+            allowed = {str(v[0]) for v in c["enum"]}
+            return ("enum", nd(value) in {nd(a) for a in allowed} or str(value).strip() in allowed)
+        if dt == "currency":
+            return ("currency", bool(re.fullmatch(r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}", str(value).strip())))
+        return (dt, None)
     cdir = os.path.abspath(args.outDir)
     os.makedirs(f"{cdir}/docs", exist_ok=True)
     os.makedirs(f"{cdir}/data", exist_ok=True)
@@ -339,11 +364,21 @@ def main():
             if not label:  # z.B. E0200604 (Zeile 7) nicht im Feld-Mapping
                 continue
             e = merged[code]
-            text = f"{emp or 'Arbeitgeber unbekannt'} — Lohnsteuerbescheinigung {year} — {label} ({code}): {e['value']} EUR"
-            claims.append({"id": hashlib.sha1(text.encode()).hexdigest()[:16], "text": text,
-                           "source": d.file, "page": int(e["page"]), "y": int(e["y"]),
-                           "reader": "glyph-textlayer", "code": code, "value": e["value"],
-                           "employer": emp, "witnesses": e["witnesses"]})
+            cm = catalog.get(code) or {}
+            dt, valid = validate(code, e["value"])
+            # Katalog-kanonischer Kopf (Anlage · Zeile · Drucktext) macht den Atom-Text zum
+            # besseren Retrieval-Ziel UND schema-bewusst — der XSD-Enumerations-Gate.
+            anl = f" · Anlage {cm['anlage']} Zeile {cm.get('zeile')}" if cm.get("anlage") else ""
+            text = f"{emp or 'Arbeitgeber unbekannt'} — Lohnsteuerbescheinigung {year} — {label} ({code}){anl}: {e['value']} EUR"
+            claim = {"id": hashlib.sha1(text.encode()).hexdigest()[:16], "text": text,
+                     "source": d.file, "page": int(e["page"]), "y": int(e["y"]),
+                     "reader": "glyph-textlayer", "code": code, "value": e["value"],
+                     "employer": emp, "witnesses": e["witnesses"]}
+            if dt is not None:
+                claim["datentyp"] = dt
+            if valid is not None:
+                claim["valid"] = valid
+            claims.append(claim)
 
     with open(f"{cdir}/data/chunks.jsonl", "w") as f:
         for c in claims:
