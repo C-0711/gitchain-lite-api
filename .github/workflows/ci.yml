@@ -1,0 +1,29 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: Syntax — all .mjs
+        run: for f in *.mjs; do node --check "$f"; done
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Compile — all toolkit/training .py
+        run: python -m py_compile toolkit/*.py training/*.py
+      - name: doctor (core prerequisites)
+        run: node gitchain-lite.mjs --doctor
+      - name: demo (model-free: build + push + cited query)
+        run: ./demo.sh
+      - name: eval self-test (BM25 on the model-free demo container)
+        run: |
+          set -e
+          BASE=$(mktemp -d); WORK=$(mktemp -d)
+          REPO_BASE_PATH="$BASE" PORT=7451 node gitchain-lite.mjs & SRV=$!
+          trap 'kill $SRV 2>/dev/null' EXIT
+          for i in $(seq 1 20); do curl -sf localhost:7451/api/v1/health && break; sleep 0.3; done
+          node demo/build-lite.mjs demo/docs "$WORK"
+          python toolkit/gitchain-eval.py "$WORK" examples/goldset-demo.jsonl | tee /tmp/ev.txt
+          grep -q "bm25" /tmp/ev.txt
