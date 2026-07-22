@@ -7,17 +7,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - name: Syntax — all .mjs
+      - name: "Syntax check .mjs"
         run: for f in *.mjs; do node --check "$f"; done
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - name: Compile — all toolkit/training .py
+      - name: "Compile toolkit and training py"
         run: python -m py_compile toolkit/*.py training/*.py
-      - name: doctor (core prerequisites)
+      - name: "doctor (core prerequisites)"
         run: node gitchain-lite.mjs --doctor
-      - name: demo (model-free: build + push + cited query)
+      - name: "demo (model-free build, push, cited query)"
         run: ./demo.sh
-      - name: eval self-test (BM25 on the model-free demo container)
+      - name: "eval self-test (BM25 on demo container)"
         run: |
           set -e
           BASE=$(mktemp -d); WORK=$(mktemp -d)
