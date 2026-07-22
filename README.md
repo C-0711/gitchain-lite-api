@@ -36,7 +36,7 @@ Faehigkeit ist ein opt-in — das System degradiert sanft statt zu brechen:
 
 | Stufe | Was du bekommst | Was du brauchst |
 |---|---|---|
-| 0 (Default) | Git-Host + BM25-Suche mit Zitaten | nichts |
+| 0 (Default) | Git-Host + BM25-Suche, jeder Treffer **seitenzitiert** (Glyph-Provenienz: Datei + Seite + y bei PDFs, Zeilenbereich bei Text) | nichts (PDFs: `pip3 install numpy pymupdf`) |
 | 1 | dense+BM25 fusionierte Suche (RRF) | `EMBED_URL` (OpenAI-kompatibler Embeddings-Server) |
 | 2 | zitierte **Antworten** statt nur Treffer | `CHAT_URL` (OpenAI-kompatibler Chat-Server) |
 | 3 | PDF-Ingest per `git push` | `pip3 install numpy pymupdf` + `INGEST_CMD` |

@@ -413,7 +413,10 @@ async function queryContainer(b) {
   const mode = denseRanks ? "dense+bm25 (rrf)" : "bm25 (kein EMBED_URL noetig)";
   const matches = ranked.slice(0, k).map((r) => {
     const id = order[r], c = chunks[id] || {};
-    return { score: +((scores.get(r) ?? 0)).toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) };
+    const m = { score: +((scores.get(r) ?? 0)).toFixed(4), id, source: c.source, text: (c.text || "").slice(0, 700) };
+    // Provenienz durchreichen: Seite/Position/Leser, wenn der Builder sie mitgab (Glyph: page+y)
+    for (const f of ["page", "y", "line_from", "line_to", "reader"]) if (c[f] !== undefined) m[f] = c[f];
+    return m;
   });
   const out = { container: segs.join("/"), q, count: order.length, mode, matches };
   if (b.answer && CHAT_URL) { try { out.answer = await chatAnswer(q, matches); } catch (e) { out.answer_error = String((e && e.message) || e); } }
